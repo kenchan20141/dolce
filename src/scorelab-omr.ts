@@ -5,6 +5,8 @@ import { browserMeasure, ensureFontsReady } from "./common/measure.browser";
 import { asset } from "./common/asset";
 import { App, type ViewMode } from "./editor/app";
 import type { DocFormatId } from "./editor/formats";
+import type { ElementId } from "./model/doc";
+import { anchorSeconds, spanSeconds, timelineSeconds, type PlayPoint } from "./editor/player";
 import { SAMPLE } from "./editor/sample";
 import { initLang } from "./i18n";
 import { attachPinchZoom } from "./editor/pinchzoom";
@@ -31,7 +33,7 @@ async function registerBravura() {
   for (const f of faces) (document.fonts as FontFaceSet).add(f);
 }
 
-/** 對過大的照片做安全平滑縮圖（只針對長邊 > 2400px 或超過 450 萬像素的圖檔），兼顧速度與譜線準確率。 */
+/** 對過大照片做安全高品質縮圖（僅針對長邊 > 2400px 或超過 450 萬像素），兼顧速度與辨識準確率。 */
 async function maybeOptimizeImage(file: File): Promise<{ bytes: Uint8Array; mime?: string }> {
   const raw = new Uint8Array(await file.arrayBuffer());
   const mime = file.type || undefined;
@@ -87,15 +89,268 @@ export interface MountShellOptions {
   viewSwitch?: HTMLElement | null;
   viewBtns?: ReadonlyMap<ViewMode, HTMLButtonElement>;
   onZoomChange?: (zoom: number) => void;
+  onRangeChange?: (state: { active: boolean; picking: boolean; hasStart: boolean }) => void;
 }
 
 let _appPromise: Promise<App> | null = null;
 let _app: App | null = null;
+let _scorePane: HTMLElement | null = null;
 let _onZoomChange: ((z: number) => void) | undefined;
+let _onRangeChange: MountShellOptions["onRangeChange"];
 let _loadGen = 0;
+
+// ---- 譜面直接選段 A-B 反覆循環 ----
+let _abLoop: { first: PlayPoint; last: PlayPoint; tFrom: number; tTo: number } | null = null;
+let _abPendingStart: ElementId | null = null;
+let _rangePickMode = false;
+
+function notifyRange() {
+  _onRangeChange?.({
+    active: _abLoop !== null,
+    picking: _rangePickMode,
+    hasStart: _abPendingStart !== null,
+  });
+}
+
+function resolveNoteIdAt(el: Element | null): ElementId | null {
+  if (!_app || !el) return null;
+  if (_app.mode === "mixed") return _app.painter.noteAt(el);
+  const entry = _app.syncView.entryAt(el);
+  return entry && (entry.kind === "note" || entry.kind === "lyric" || entry.kind === "sustain") ? entry.id : null;
+}
+
+function getTimeline() {
+  if (!_app) return null;
+  const src = _app.playable();
+  if (!src) return null;
+  return timelineSeconds(src, _app.playback.options());
+}
+
+function clearAbBands() {
+  _scorePane?.querySelectorAll(".sl-ab-band").forEach((el) => el.remove());
+}
+
+function paintAbBands() {
+  clearAbBands();
+  if (!_app || !_scorePane) return;
+  if (!_abLoop && _abPendingStart === null) return;
+  const info = _abLoop ? getTimeline() : null;
+  const NS = "http://www.w3.org/2000/svg";
+
+  for (const svg of _scorePane.querySelectorAll<SVGSVGElement>(".score-page-wrap svg")) {
+    const matchedEls: SVGGraphicsElement[] = [];
+
+    if (_app.mode === "mixed") {
+      const seenIds = new Set<ElementId>();
+      for (const g of svg.querySelectorAll<SVGGElement>("g")) {
+        const id = _app.painter.noteAt(g);
+        if (id === null || seenIds.has(id)) continue;
+        seenIds.add(id);
+        let hit = false;
+        if (_abPendingStart !== null && id === _abPendingStart) hit = true;
+        else if (_abLoop && info) {
+          const t = anchorSeconds(info.tl, info.spq, { id, pass: 1 });
+          if (t !== null && t >= _abLoop.tFrom - 0.002 && t <= _abLoop.tTo + 0.002) hit = true;
+        }
+        if (hit) {
+          for (const nel of _app.painter.noteEls(id)) {
+            if (nel.ownerSVGElement === svg) matchedEls.push(nel);
+          }
+        }
+      }
+    } else {
+      const seenIds = new Set<ElementId>();
+      for (const g of svg.querySelectorAll<SVGGElement>("g")) {
+        const entry = _app.syncView.entryAt(g);
+        if (!entry || entry.kind !== "note" || seenIds.has(entry.id)) continue;
+        seenIds.add(entry.id);
+        let hit = false;
+        if (_abPendingStart !== null && entry.id === _abPendingStart) hit = true;
+        else if (_abLoop && info) {
+          const t = anchorSeconds(info.tl, info.spq, { id: entry.id, pass: 1 });
+          if (t !== null && t >= _abLoop.tFrom - 0.002 && t <= _abLoop.tTo + 0.002) hit = true;
+        }
+        if (hit) matchedEls.push(g);
+      }
+    }
+
+    for (const el of matchedEls) {
+      try {
+        const box = el.getBBox();
+        if (box.width <= 0 && box.height <= 0) continue;
+        const pad = 4;
+        const rect = document.createElementNS(NS, "rect");
+        rect.setAttribute("class", "sl-ab-band");
+        rect.setAttribute("x", String(box.x - pad));
+        rect.setAttribute("y", String(box.y - pad));
+        rect.setAttribute("width", String(box.width + pad * 2));
+        rect.setAttribute("height", String(box.height + pad * 2));
+        rect.setAttribute("rx", "4");
+        rect.setAttribute("fill", "rgba(91, 122, 98, 0.22)");
+        rect.setAttribute("stroke", "#5b7a62");
+        rect.setAttribute("stroke-width", "1.5");
+        rect.setAttribute("pointer-events", "none");
+        svg.appendChild(rect);
+      } catch {
+        // 忽略未渲染元素
+      }
+    }
+  }
+}
+
+function clearAbLoop(stopLoopToggle = true) {
+  _abLoop = null;
+  _abPendingStart = null;
+  _rangePickMode = false;
+  clearAbBands();
+  if (_app && stopLoopToggle) {
+    _app.playback.setLoop(false);
+  }
+  notifyRange();
+}
+
+function applyAbLoopByIds(idA: ElementId, idB: ElementId): boolean {
+  if (!_app) return false;
+  const info = getTimeline();
+  if (!info) return false;
+  const tA = anchorSeconds(info.tl, info.spq, { id: idA, pass: 1 });
+  const tB = anchorSeconds(info.tl, info.spq, { id: idB, pass: 1 });
+  if (tA === null || tB === null) return false;
+
+  let firstId = idA, lastId = idB, tFrom = tA, tTo = tB;
+  if (tA > tB) {
+    firstId = idB; lastId = idA; tFrom = tB; tTo = tA;
+  }
+  const span = spanSeconds(info.tl, info.spq, { id: firstId, pass: 1 }, { id: lastId, pass: 1 });
+  if (!span || span.to <= span.from) return false;
+
+  _abLoop = { first: { id: firstId, pass: 1 }, last: { id: lastId, pass: 1 }, tFrom, tTo };
+  _abPendingStart = null;
+  _rangePickMode = false;
+  paintAbBands();
+  _app.playback.setLoop(true);
+  _app.playback.seekTo({ id: firstId, pass: 1 });
+  if (!_app.playback.busy) void _app.playback.play();
+  notifyRange();
+  return true;
+}
+
+function wireDirectScoreSelection(scorePane: HTMLElement) {
+  let dragStart: { x: number; y: number } | null = null;
+  let dragging = false;
+  let suppressClick = false;
+  let marqueeEl: HTMLDivElement | null = null;
+
+  const removeMarquee = () => {
+    marqueeEl?.remove();
+    marqueeEl = null;
+  };
+
+  scorePane.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    if (e.pointerType === "touch" && !_rangePickMode) return;
+    const rc = scorePane.getBoundingClientRect();
+    if (e.clientX - rc.left >= scorePane.clientLeft + scorePane.clientWidth) return;
+    dragStart = { x: e.clientX, y: e.clientY };
+    dragging = false;
+  }, true);
+
+  window.addEventListener("pointermove", (e) => {
+    if (!dragStart) return;
+    const dx = e.clientX - dragStart.x;
+    const dy = e.clientY - dragStart.y;
+    if (!dragging && Math.hypot(dx, dy) < 9) return;
+    if (!dragging) {
+      dragging = true;
+      marqueeEl = document.createElement("div");
+      marqueeEl.style.cssText =
+        "position:fixed;pointer-events:none;z-index:9999;border:1.5px solid #5b7a62;" +
+        "background:rgba(91,122,98,0.18);border-radius:4px;";
+      document.body.appendChild(marqueeEl);
+    }
+    if (marqueeEl) {
+      marqueeEl.style.left = `${Math.min(dragStart.x, e.clientX)}px`;
+      marqueeEl.style.top = `${Math.min(dragStart.y, e.clientY)}px`;
+      marqueeEl.style.width = `${Math.abs(dx)}px`;
+      marqueeEl.style.height = `${Math.abs(dy)}px`;
+    }
+  });
+
+  window.addEventListener("pointerup", (e) => {
+    if (!dragStart) return;
+    const start = dragStart;
+    dragStart = null;
+    if (!dragging) return;
+    dragging = false;
+    suppressClick = true;
+    setTimeout(() => { suppressClick = false; }, 50);
+    removeMarquee();
+
+    if (!_app) return;
+    const info = getTimeline();
+    if (!info) return;
+
+    const rLeft = Math.min(start.x, e.clientX);
+    const rRight = Math.max(start.x, e.clientX);
+    const rTop = Math.min(start.y, e.clientY);
+    const rBottom = Math.max(start.y, e.clientY);
+
+    let minId: ElementId | null = null, minT = Infinity;
+    let maxId: ElementId | null = null, maxT = -Infinity;
+    const seenIds = new Set<ElementId>();
+
+    for (const g of scorePane.querySelectorAll<SVGGElement>(".score-page-wrap svg g")) {
+      const id = resolveNoteIdAt(g);
+      if (id === null || seenIds.has(id)) continue;
+      const b = g.getBoundingClientRect();
+      if (b.width <= 0 || b.height <= 0) continue;
+      if (b.right < rLeft || b.left > rRight || b.bottom < rTop || b.top > rBottom) continue;
+      seenIds.add(id);
+      const t = anchorSeconds(info.tl, info.spq, { id, pass: 1 });
+      if (t === null) continue;
+      if (t < minT) { minT = t; minId = id; }
+      if (t > maxT) { maxT = t; maxId = id; }
+    }
+
+    if (minId !== null && maxId !== null && maxT > minT) {
+      applyAbLoopByIds(minId, maxId);
+    } else if (minId !== null) {
+      _abLoop = null;
+      _abPendingStart = minId;
+      _rangePickMode = true;
+      paintAbBands();
+      notifyRange();
+    }
+  });
+
+  scorePane.addEventListener("click", (e) => {
+    if (suppressClick) {
+      e.stopPropagation();
+      e.preventDefault();
+      suppressClick = false;
+      return;
+    }
+    if (!_rangePickMode) return;
+    const id = resolveNoteIdAt(e.target as Element | null);
+    if (id === null) return;
+    e.stopPropagation();
+    e.preventDefault();
+
+    if (_abPendingStart === null) {
+      _abLoop = null;
+      _abPendingStart = id;
+      paintAbBands();
+      notifyRange();
+    } else if (_abPendingStart !== id) {
+      applyAbLoopByIds(_abPendingStart, id);
+    }
+  }, true);
+}
 
 async function initEngine(opts: MountShellOptions): Promise<App> {
   _onZoomChange = opts.onZoomChange;
+  _onRangeChange = opts.onRangeChange;
+  _scorePane = opts.scorePane;
   if (_app) return _app;
   if (_appPromise) return _appPromise;
 
@@ -117,6 +372,10 @@ async function initEngine(opts: MountShellOptions): Promise<App> {
     app.stopPlayback();
     app.clearPages();
 
+    // 接管 loopPoints：有譜面直選 A-B 選段時，直接讓官方 PlaybackController 反覆播放該段
+    const origLoopPoints = app.loopPoints.bind(app);
+    app.loopPoints = () => (_abLoop ? { first: _abLoop.first, last: _abLoop.last } : origLoopPoints());
+
     if (opts.playBtn) {
       app.playback.setPlaybackBtn(opts.playBtn);
       opts.playBtn.addEventListener("click", () => void app.playback.toggle());
@@ -128,7 +387,10 @@ async function initEngine(opts: MountShellOptions): Promise<App> {
 
     if (opts.viewBtns) {
       for (const [mode, btn] of opts.viewBtns) {
-        btn.addEventListener("click", () => void app.setViewMode(mode));
+        btn.addEventListener("click", async () => {
+          clearAbLoop(false);
+          await app.setViewMode(mode);
+        });
       }
       if (opts.viewSwitch) app.setViewModeButtons(opts.viewSwitch, opts.viewBtns);
     }
@@ -140,6 +402,7 @@ async function initEngine(opts: MountShellOptions): Promise<App> {
       onChange: () => _onZoomChange?.(app.zoom),
     });
     _onZoomChange?.(app.zoom);
+    wireDirectScoreSelection(opts.scorePane);
 
     void import("./omrkit/runtime.browser").then((m) => m.browserRuntime.prepare("det")).catch(() => {});
 
@@ -163,6 +426,7 @@ async function recognizeAndRender(
   if (!files.length) throw new Error("未選擇任何檔案");
 
   const myGen = ++_loadGen;
+  clearAbLoop(true);
   _app.stopPlayback();
   _app.clearPages();
 
@@ -233,7 +497,7 @@ async function recognizeAndRender(
     }
   }
 
-  // 2. 位圖五線譜（含多張圖片：先辨識第 1 頁並立即顯示，再補齊全曲）
+  // 2. 位圖五線譜（支援多張圖片：先辨識第 1 頁立即顯示，再補齊全曲）
   if (!xml && kind !== "jianpu") {
     onProgress("載入樂譜引擎...");
     const rb = await import("./rasteromr/browser");
@@ -255,7 +519,6 @@ async function recognizeAndRender(
     if (!probe || probe.isStaff) {
       let showedFirst = false;
 
-      // 多張圖片：先獨立辨識第 1 頁，完成後立即渲染給使用者看
       if (rasterPdfs.length > 1) {
         onProgress("辨識第 1 頁中...");
         const firstRes = await rb.recognizeRasterPdfs([rasterPdfs[0]!], {
@@ -305,7 +568,6 @@ async function recognizeAndRender(
     engine = "jianpu";
   }
 
-  // 保留使用者剛剛在第 1 頁搶先切換過的視圖
   const keepView = _app.pageEls.length > 0 ? _app.viewMode : null;
   if (!_app.adoptStaffXml(xml)) {
     throw new Error(_app.status || "樂譜無法渲染");
@@ -334,6 +596,8 @@ declare global {
       loadXmlText: (xml: string, viewMode?: ViewMode) => Promise<void>;
       getSnapshot: () => ScoreSnapshot | null;
       loadSnapshot: (snap: Pick<ScoreSnapshot, "format" | "text" | "viewMode">) => Promise<void>;
+      toggleRangePick: () => void;
+      clearRangeLoop: () => void;
       setViewMode: (m: ViewMode) => Promise<void>;
       exportXml: () => Promise<string>;
       zoomBy: (f: number) => void;
@@ -353,6 +617,7 @@ window.__dolceEngine = {
   async loadXmlText(xml, viewMode = "staff") {
     if (!_app) return;
     _loadGen++;
+    clearAbLoop(true);
     _app.stopPlayback();
     _app.clearPages();
     if (!_app.adoptStaffXml(xml)) {
@@ -378,6 +643,7 @@ window.__dolceEngine = {
   async loadSnapshot(snap) {
     if (!_app) return;
     _loadGen++;
+    clearAbLoop(true);
     _app.stopPlayback();
     _app.clearPages();
     if (snap.format === "musicxml") {
@@ -394,8 +660,19 @@ window.__dolceEngine = {
       throw new Error(_app.status || "樂譜渲染失敗");
     }
   },
+  toggleRangePick() {
+    _rangePickMode = !_rangePickMode;
+    if (!_rangePickMode) _abPendingStart = null;
+    paintAbBands();
+    notifyRange();
+  },
+  clearRangeLoop() {
+    clearAbLoop(true);
+  },
   async setViewMode(m) {
-    if (_app) await _app.setViewMode(m);
+    if (!_app) return;
+    clearAbLoop(false);
+    await _app.setViewMode(m);
   },
   async exportXml() {
     return _app ? _app.musicXmlForSave() : "";
