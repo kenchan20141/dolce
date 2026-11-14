@@ -773,6 +773,7 @@
           if (selectedCats.has(k)) { if (selectedCats.size === 1) return; selectedCats.delete(k); btn.classList.remove('active'); }
           else { selectedCats.add(k); btn.classList.add('active'); }
           renderLibrary(); generateQuestion(false);
+          setTimeout(() => void ensureDolceEngine(), 300);
         });
         bar.appendChild(btn);
       });
