@@ -74,7 +74,16 @@ export default defineConfig(async () => ({
   plugins: [copyPdfjsWasm(), emitEnPage()],
   define: { __APP_VERSION__: JSON.stringify(pkgVersion) },
   // 程序产出一律放 out/（构建、脚本报告、缓存），web 根下不再散落输出目录
-  build: { outDir: "out/dist", emptyOutDir: true },
+ build: {
+  outDir: "out/dist",
+  emptyOutDir: true,
+  rollupOptions: {
+    input: {
+      main: `${here}/index.html`,
+      scoreLab: `${here}/score-lab.html`,
+    },
+  },
+},
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
