@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="zh-Hant" class="sl-html">
 <head>
@@ -7,6 +8,284 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;600;700&display=swap" rel="stylesheet" crossorigin="anonymous" />
+  <link rel="modulepreload" href="/src/scorelab-omr.ts" />
+  <script>
+    // ==========================================
+    // 0. 模型 / WASM / 字型 永久快取與啟動預載機制
+    // ==========================================
+    (() => {
+      const CACHE_NAME = 'scorelab-model-cache-v1';
+      const IDB_NAME = 'scorelab_model_blob_db';
+      const IDB_STORE = 'assets';
+      const PRELOAD_LS = 'scorelab_preload_urls_v1';
+      const MAX_PRELOAD_URLS = 40;
+
+      const origFetch = window.fetch.bind(window);
+      const inflight = new Map();
+      const memPending = new Set();
+
+      function normalizeUrl(input) {
+        try {
+          const raw = typeof input === 'string'
+            ? input
+            : (input instanceof URL ? input.href : (input && input.url ? input.url : ''));
+          if (!raw) return null;
+          const u = new URL(raw, location.href);
+          if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+          return u;
+        } catch {
+          return null;
+        }
+      }
+
+      function isCacheableModelOrAsset(u) {
+        if (!u) return false;
+        if (u.origin !== location.origin && u.protocol !== 'https:') return false;
+        const p = u.pathname.toLowerCase();
+        if (
+          p.endsWith('.ts') || p.endsWith('.tsx') || p.endsWith('.js') ||
+          p.endsWith('.mjs') || p.endsWith('.css') || p.endsWith('.html')
+        ) {
+          return false;
+        }
+        if (p.includes('/@vite') || p.includes('/@fs') || p.includes('/node_modules/.vite')) {
+          return false;
+        }
+        if (/\.(onnx|ort|wasm|bin|pb|tflite|weights|model|data|woff2?|otf|traineddata)$/.test(p)) {
+          return true;
+        }
+        if (/\/(models?|onnx|ort|wasm|omr|redist|smufl)\//.test(p) && /\.(json|txt|dat|map)$/.test(p)) {
+          return true;
+        }
+        return false;
+      }
+
+      function hasRangeHeader(input, init) {
+        try {
+          if (init && init.headers) {
+            const h = new Headers(init.headers);
+            if (h.has('range')) return true;
+          }
+          if (input instanceof Request && input.headers.has('range')) return true;
+        } catch {}
+        return false;
+      }
+
+      function readPreloadManifest() {
+        try {
+          const raw = localStorage.getItem(PRELOAD_LS);
+          const arr = raw ? JSON.parse(raw) : [];
+          return Array.isArray(arr) ? arr.filter((x) => typeof x === 'string') : [];
+        } catch {
+          return [];
+        }
+      }
+
+      function rememberPreloadUrl(urlHref) {
+        try {
+          const list = readPreloadManifest();
+          if (!list.includes(urlHref)) {
+            list.push(urlHref);
+            if (list.length > MAX_PRELOAD_URLS) list.splice(0, list.length - MAX_PRELOAD_URLS);
+            localStorage.setItem(PRELOAD_LS, JSON.stringify(list));
+          }
+        } catch {}
+      }
+
+      let idbPromise = null;
+      function openAssetDB() {
+        if (idbPromise) return idbPromise;
+        if (!('indexedDB' in window)) return Promise.resolve(null);
+        idbPromise = new Promise((resolve) => {
+          try {
+            const req = indexedDB.open(IDB_NAME, 1);
+            req.onupgradeneeded = () => {
+              const db = req.result;
+              if (!db.objectStoreNames.contains(IDB_STORE)) {
+                db.createObjectStore(IDB_STORE, { keyPath: 'url' });
+              }
+            };
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => resolve(null);
+          } catch {
+            resolve(null);
+          }
+        });
+        return idbPromise;
+      }
+
+      async function getFromStore(urlHref) {
+        if ('caches' in window) {
+          try {
+            const cache = await caches.open(CACHE_NAME);
+            const hit = await cache.match(urlHref);
+            if (hit) return hit;
+          } catch {}
+        }
+        try {
+          const db = await openAssetDB();
+          if (!db) return null;
+          return await new Promise((resolve) => {
+            const tx = db.transaction(IDB_STORE, 'readonly');
+            const req = tx.objectStore(IDB_STORE).get(urlHref);
+            req.onsuccess = () => {
+              const rec = req.result;
+              if (!rec || !rec.body) { resolve(null); return; }
+              try {
+                resolve(new Response(rec.body, {
+                  status: rec.status || 200,
+                  statusText: rec.statusText || 'OK',
+                  headers: rec.headers || [],
+                }));
+              } catch {
+                resolve(null);
+              }
+            };
+            req.onerror = () => resolve(null);
+          });
+        } catch {
+          return null;
+        }
+      }
+
+      async function putIntoStore(urlHref, responseClone) {
+        rememberPreloadUrl(urlHref);
+        if ('caches' in window) {
+          try {
+            const cache = await caches.open(CACHE_NAME);
+            await cache.put(urlHref, responseClone);
+            return;
+          } catch {}
+        }
+        try {
+          const db = await openAssetDB();
+          if (!db) return;
+          const buf = await responseClone.arrayBuffer();
+          const headers = [];
+          responseClone.headers.forEach((v, k) => headers.push([k, v]));
+          await new Promise((resolve) => {
+            const tx = db.transaction(IDB_STORE, 'readwrite');
+            tx.objectStore(IDB_STORE).put({
+              url: urlHref,
+              status: responseClone.status || 200,
+              statusText: responseClone.statusText || 'OK',
+              headers,
+              body: buf,
+              savedAt: Date.now(),
+            });
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => resolve();
+          });
+        } catch {}
+      }
+
+      async function fetchWithPersistentCache(input, init, urlHref) {
+        const cached = await getFromStore(urlHref);
+        if (cached) {
+          rememberPreloadUrl(urlHref);
+          return cached;
+        }
+
+        if (inflight.has(urlHref)) {
+          const shared = await inflight.get(urlHref);
+          return shared.clone();
+        }
+
+        const p = (async () => {
+          const resp = await origFetch(input, init);
+          if (resp && resp.ok && resp.status === 200 && !resp.bodyUsed) {
+            try {
+              const copy = resp.clone();
+              void putIntoStore(urlHref, copy);
+            } catch {}
+          }
+          return resp;
+        })();
+
+        inflight.set(urlHref, p);
+        try {
+          const res = await p;
+          return res.clone();
+        } finally {
+          inflight.delete(urlHref);
+        }
+      }
+
+      window.fetch = function (input, init) {
+        const method = (
+          (init && init.method) ||
+          (input instanceof Request ? input.method : 'GET')
+        ).toUpperCase();
+        const u = normalizeUrl(input);
+
+        if (method === 'GET' && u && isCacheableModelOrAsset(u) && !hasRangeHeader(input, init)) {
+          return fetchWithPersistentCache(input, init, u.href);
+        }
+        return origFetch(input, init);
+      };
+
+      async function warmUrl(urlHref) {
+        if (memPending.has(urlHref)) return;
+        memPending.add(urlHref);
+        try {
+          const hit = await getFromStore(urlHref);
+          if (hit) return;
+          const resp = await origFetch(urlHref, { cache: 'force-cache' });
+          if (resp && resp.ok && resp.status === 200 && !resp.bodyUsed) {
+            await putIntoStore(urlHref, resp.clone());
+          }
+        } catch {}
+      }
+
+      function injectPreloadLink(urlHref) {
+        try {
+          const p = new URL(urlHref).pathname.toLowerCase();
+          const link = document.createElement('link');
+          link.rel = 'preload';
+          link.href = urlHref;
+          if (/\.(woff2?|otf)$/.test(p)) {
+            link.as = 'font';
+            link.crossOrigin = 'anonymous';
+          } else {
+            link.as = 'fetch';
+            link.crossOrigin = 'anonymous';
+          }
+          document.head.appendChild(link);
+        } catch {}
+      }
+
+      // 啟動即預載上次記錄的模型與字型（若已在快取中則僅確認，不重複耗用網路）
+      const knownUrls = readPreloadManifest();
+      for (const u of knownUrls) {
+        const parsed = normalizeUrl(u);
+        if (parsed && isCacheableModelOrAsset(parsed)) {
+          injectPreloadLink(parsed.href);
+          void warmUrl(parsed.href);
+        }
+      }
+
+      // 監聽任何資源下載（含首次下載的模型 / WASM / 字型），持久化進快取與預載清單
+      if ('PerformanceObserver' in window) {
+        try {
+          const po = new PerformanceObserver((list) => {
+            for (const entry of list.getEntries()) {
+              const u = normalizeUrl(entry.name);
+              if (u && isCacheableModelOrAsset(u)) {
+                rememberPreloadUrl(u.href);
+                void warmUrl(u.href);
+              }
+            }
+          });
+          po.observe({ type: 'resource', buffered: true });
+        } catch {}
+      }
+
+      window.__scorelabPreload = {
+        warmUrl,
+        listCached: readPreloadManifest,
+      };
+    })();
+  </script>
   <script type="module" src="/src/scorelab-omr.ts"></script>
   <style>
     /* 無印良品 × 莫蘭迪日式色系（使用獨立 --sl-* 變數避免被官方 styles.css 覆蓋） */
@@ -1792,7 +2071,8 @@
     initCategories();
     renderLibrary();
     generateQuestion(false);
-    setTimeout(() => void ensureDolceEngine(), 300);
+    // 立即啟動引擎與模型預載，移除 300ms 延遲以加快手機端就緒速度
+    void ensureDolceEngine();
   </script>
 </body>
 </html>
