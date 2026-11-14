@@ -1,0 +1,1352 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SCORE LAB · 樂譜與簡譜識別</title>
+  <script type="module" src="/src/scorelab-omr.ts"></script>
+  <style>
+    :root {
+      --bg: #050507;
+      --surface: #0c0e13;
+      --surface-2: #131620;
+      --line: #1f2433;
+      --line-hi: #32394f;
+      --text: #f3f5f8;
+      --muted: #68738c;
+      --mint: #00e89d;
+      --mint-bg: rgba(0, 232, 157, 0.12);
+      --amber: #ffb020;
+      --amber-bg: rgba(255, 176, 32, 0.14);
+      --coral: #ff3b5c;
+      --coral-bg: rgba(255, 59, 92, 0.14);
+      --cyan: #38bdf8;
+      --mono: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: "Inter", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif;
+      min-height: 100vh;
+      padding: 14px 10px 72px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .app { max-width: 1000px; margin: 0 auto; }
+
+    /* Topbar */
+    .topbar {
+      display: flex; justify-content: space-between; align-items: center;
+      flex-wrap: wrap; gap: 10px; padding-bottom: 12px;
+      border-bottom: 1px solid var(--line); margin-bottom: 12px;
+    }
+    .brand { display: flex; align-items: center; gap: 8px; }
+    .brand-sq { width: 10px; height: 10px; background: var(--mint); }
+    .brand h1 { margin: 0; font-size: 0.9rem; letter-spacing: 0.22em; font-weight: 800; }
+    .mono-tag { font-family: var(--mono); font-size: 0.7rem; color: var(--muted); border: 1px solid var(--line); padding: 2px 7px; }
+
+    .tabs { display: flex; gap: 2px; background: var(--surface); border: 1px solid var(--line); padding: 3px; }
+    .tab-btn { border: none; background: transparent; color: var(--muted); padding: 6px 12px; font-size: 0.78rem; font-weight: 700; cursor: pointer; }
+    .tab-btn.active { background: var(--text); color: var(--bg); }
+
+    /* Panels & Controls */
+    .panel { background: var(--surface); border: 1px solid var(--line); padding: 12px; margin-bottom: 10px; }
+    .row { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+    .between { justify-content: space-between; }
+
+    .ctrl-pill {
+      display: inline-flex; align-items: center; gap: 7px;
+      background: var(--surface-2); border: 1px solid var(--line);
+      padding: 4px 9px; font-family: var(--mono); font-size: 0.76rem;
+    }
+    input[type="range"] { width: 70px; accent-color: var(--mint); cursor: pointer; }
+    select { background: var(--surface-2); color: var(--text); border: 1px solid var(--line); padding: 5px 8px; font-size: 0.76rem; font-weight: 700; outline: none; cursor: pointer; }
+
+    .toggle {
+      display: inline-flex; align-items: center; gap: 5px;
+      background: var(--surface-2); border: 1px solid var(--line);
+      padding: 5px 9px; font-size: 0.74rem; font-weight: 700; color: var(--muted); cursor: pointer; user-select: none;
+    }
+    .toggle input { display: none; }
+    .toggle .dot { width: 6px; height: 6px; background: #333a4d; }
+    .toggle.on { color: var(--text); border-color: var(--line-hi); }
+    .toggle.on .dot { background: var(--mint); box-shadow: 0 0 8px var(--mint); }
+
+    .btn {
+      border: 1px solid var(--line-hi); background: var(--surface-2); color: var(--text);
+      padding: 6px 11px; font-size: 0.76rem; font-weight: 700; cursor: pointer;
+      display: inline-flex; align-items: center; gap: 5px;
+    }
+    .btn:hover:not(:disabled) { border-color: var(--text); }
+    .btn:disabled { opacity: 0.35; cursor: not-allowed; }
+    .btn-mint { background: var(--mint); color: #04120c; border-color: var(--mint); }
+    .btn-xs { padding: 4px 8px; font-size: 0.7rem; }
+
+    .cat-row { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+    .cat-pill { border: 1px solid var(--line); background: transparent; color: var(--muted); padding: 3px 9px; font-size: 0.72rem; font-weight: 700; cursor: pointer; }
+    .cat-pill.active { border-color: var(--mint); color: var(--mint); background: var(--mint-bg); }
+
+    /* Beat Matrix */
+    .beat-strip { display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 10px; }
+    .beat-status { font-family: var(--mono); font-size: 0.7rem; color: var(--muted); min-width: 60px; text-align: right; }
+    .leds { display: flex; gap: 5px; }
+    .led { width: 24px; height: 3px; background: var(--surface-2); border: 1px solid var(--line); }
+    .led.countin { background: var(--amber); border-color: var(--amber); }
+    .led.playing { background: var(--mint); border-color: var(--mint); }
+
+    /* Quiz / Library / Score */
+    .grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+    @media (max-width: 680px) { .grid-2 { grid-template-columns: 1fr; } }
+
+    .pad {
+      position: relative; background: var(--surface-2); border: 1px solid var(--line);
+      padding: 18px 10px 12px; min-height: 96px; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; cursor: pointer; overflow-x: auto;
+    }
+    .pad:hover:not(.locked) { border-color: var(--text); }
+    .pad.correct { border-color: var(--mint); background: var(--mint-bg); }
+    .pad.wrong { border-color: var(--coral); background: var(--coral-bg); }
+    .pad.dimmed { opacity: 0.4; }
+    .pad-idx { position: absolute; top: 6px; left: 8px; font-family: var(--mono); font-size: 0.68rem; color: var(--muted); }
+    .pad-meta { margin-top: 6px; display: flex; align-items: center; gap: 8px; font-size: 0.74rem; color: var(--muted); font-weight: 700; }
+
+    .result-strip {
+      margin-top: 10px; padding: 8px 12px; display: none;
+      align-items: center; justify-content: space-between; font-size: 0.8rem; font-weight: 700; border: 1px solid transparent;
+    }
+    .result-strip.show { display: flex; }
+    .result-strip.ok { background: var(--mint-bg); border-color: var(--mint); color: var(--mint); }
+    .result-strip.err { background: var(--coral-bg); border-color: var(--coral); color: var(--coral); }
+
+    .lib-card, .m-card { background: var(--surface-2); border: 1px solid var(--line); padding: 9px 11px; cursor: pointer; overflow-x: auto; }
+    .playing-card { border-color: var(--mint) !important; box-shadow: inset 0 0 0 1px var(--mint); }
+    .card-top { display: flex; justify-content: space-between; align-items: center; gap: 6px; margin-bottom: 2px; }
+    .tag { font-family: var(--mono); font-size: 0.64rem; padding: 1px 5px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+    .tag-sync { color: var(--amber); border-color: rgba(255,176,32,0.45); }
+    .tag-dot { color: var(--cyan); border-color: rgba(56,189,248,0.45); }
+    .tag-16 { color: #c084fc; border-color: rgba(192,132,252,0.45); }
+    .tag-off { color: var(--coral); border-color: rgba(255,59,92,0.45); }
+
+    .voice-rows { display: flex; flex-direction: column; gap: 3px; }
+    .voice-row { display: flex; align-items: center; gap: 7px; border-left: 2px solid var(--line-hi); padding-left: 6px; }
+    .voice-lbl { font-family: var(--mono); font-size: 0.64rem; color: var(--cyan); min-width: 18px; }
+
+    .dropzone {
+      border: 1px dashed var(--line-hi); padding: 20px 12px; text-align: center;
+      cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 8px;
+    }
+    .dropzone:hover, .dropzone.dragover { border-color: var(--mint); background: var(--mint-bg); }
+    .omr-status-bar {
+      margin-top: 8px; padding: 8px 10px; background: var(--surface-2); border: 1px solid var(--line-hi);
+      font-family: var(--mono); font-size: 0.74rem; color: var(--cyan); display: flex; justify-content: space-between; align-items: center;
+    }
+    .omr-status-bar.err { color: var(--coral); border-color: var(--coral); background: var(--coral-bg); }
+    .omr-status-bar.ok { color: var(--mint); border-color: var(--mint); background: var(--mint-bg); }
+
+    .dist-bar { display: flex; height: 4px; background: var(--surface-2); margin: 10px 0 8px; gap: 2px; }
+    .dist-legend { display: flex; flex-wrap: wrap; gap: 10px; font-family: var(--mono); font-size: 0.68rem; color: var(--muted); margin-bottom: 10px; }
+
+    /* ========================
+       JIANPU NOTATION
+       ======================== */
+    .jianpu-bar {
+      display: inline-flex; align-items: center; flex-wrap: nowrap; gap: 12px;
+      font-family: "Times New Roman", "Noto Serif TC", Georgia, serif;
+      font-size: 21px; font-weight: 700; color: var(--text);
+      padding: 26px 5px 34px; user-select: none;
+    }
+    .jianpu-bar::before, .jianpu-bar::after {
+      content: ""; display: inline-block; width: 2px; height: 17px; background: var(--line-hi); align-self: center; flex-shrink: 0;
+    }
+
+    .j-group-tight { display: inline-flex; align-items: center; gap: 4px; }
+    .u1 { display: inline-flex; align-items: center; gap: 5px; border-bottom: 2px solid #cbd5e1; padding-bottom: 2px; }
+    .u2-inner { display: inline-flex; align-items: center; gap: 4px; border-bottom: 2px solid #cbd5e1; padding-bottom: 2px; }
+
+    .j-ev { position: relative; display: inline-flex; align-items: center; line-height: 1.05; transition: color 0.05s, transform 0.05s; }
+    .j-ev.j-rest { color: var(--muted); }
+    .j-ev.active-note { color: #ffffff !important; text-shadow: 0 0 12px var(--mint), 0 0 4px #fff; transform: translateY(-2px) scale(1.18); }
+
+    .j-chord { display: inline-flex; flex-direction: column; align-items: center; gap: 10px; font-size: 15px; line-height: 1; padding: 3px 1px; }
+    .j-pitch-wrap { display: inline-flex; align-items: baseline; position: relative; }
+    .j-acc { font-family: system-ui, sans-serif; font-size: 0.6em; font-weight: 800; color: var(--amber); margin-right: 1px; vertical-align: super; }
+
+    .j-oct-top, .j-oct-bot {
+      position: absolute; left: 50%; transform: translateX(-50%);
+      display: flex; flex-direction: column; align-items: center; gap: 2px; pointer-events: none;
+    }
+    .j-oct-top span, .j-oct-bot span { display: block; width: 3.4px; height: 3.4px; border-radius: 50%; background: currentColor; }
+    .j-oct-top { bottom: calc(100% + 2px); }
+    .j-oct-bot { top: calc(100% + 3px); }
+
+    .u1 .j-oct-bot { top: calc(100% + 9px); }
+    .u1 .u2-inner .j-oct-bot { top: calc(100% + 14px); }
+
+    .j-chord .j-oct-top, .j-chord .j-oct-bot { gap: 1.5px; }
+    .j-chord .j-oct-top span, .j-chord .j-oct-bot span { width: 2.6px; height: 2.6px; }
+    .j-chord .j-oct-top { bottom: calc(100% + 1px); }
+    .j-chord .j-oct-bot { top: calc(100% + 1px); }
+    .u1 .j-chord .j-pitch-wrap:last-child .j-oct-bot { top: calc(100% + 10px); }
+    .u1 .u2-inner .j-chord .j-pitch-wrap:last-child .j-oct-bot { top: calc(100% + 15px); }
+
+    .j-dash { font-family: system-ui, sans-serif; font-weight: 700; margin-left: 3px; color: var(--muted); font-size: 0.88em; }
+    .j-dot { font-weight: 900; margin-left: 1px; }
+    .j-tie { font-size: 0.7em; color: var(--cyan); margin: 0 1px; }
+
+    .triplet { position: relative; display: inline-flex; align-items: center; }
+    .triplet::before { content: "3"; position: absolute; top: -18px; left: 50%; transform: translateX(-50%); font-family: var(--mono); font-size: 10px; font-weight: 800; color: var(--cyan); line-height: 1; }
+    .triplet::after { content: ""; position: absolute; top: -7px; left: 1px; right: 1px; height: 4px; border-top: 1.5px solid var(--cyan); border-left: 1.5px solid var(--cyan); border-right: 1.5px solid var(--cyan); pointer-events: none; }
+
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-sq"></span>
+        <h1>SCORE LAB</h1>
+        <span class="mono-tag" id="timeSigBadge">4/4</span>
+      </div>
+
+      <nav class="tabs">
+        <button class="tab-btn active" data-tab="analyzer">樂譜</button>
+        <button class="tab-btn" data-tab="quiz">測驗</button>
+        <button class="tab-btn" data-tab="library">圖鑑</button>
+      </nav>
+    </header>
+
+    <!-- Transport -->
+    <section class="panel">
+      <div class="row between">
+        <div class="row">
+          <div class="ctrl-pill">
+            <span id="bpmVal" style="color:var(--mint); font-weight:800;">92</span>
+            <span>BPM</span>
+            <input type="range" id="bpmRange" min="45" max="180" value="92" />
+          </div>
+          <select id="soundSelect">
+            <option value="pluck">鋼琴</option>
+            <option value="synth">合成器</option>
+            <option value="wood">木魚</option>
+          </select>
+          <select id="symbolSelect">
+            <option value="pitch">音高</option>
+            <option value="1">數字 1</option>
+            <option value="X">節奏 X</option>
+          </select>
+        </div>
+
+        <div class="row">
+          <label class="toggle on"><input type="checkbox" id="chkCountIn" checked /><span class="dot"></span>預拍</label>
+          <label class="toggle on"><input type="checkbox" id="chkMetro" checked /><span class="dot"></span>節拍</label>
+        </div>
+      </div>
+      <div class="cat-row hidden" id="catBar"></div>
+    </section>
+
+    <!-- Beat LEDs -->
+    <div class="beat-strip">
+      <span class="beat-status" id="beatStatus">READY</span>
+      <div class="leds" id="beatDots">
+        <div class="led"></div><div class="led"></div><div class="led"></div><div class="led"></div>
+      </div>
+    </div>
+
+    <!-- 1. 樂譜識別 (圖片 / PDF 原生 AI 識譜 + MusicXML / MIDI) -->
+    <section id="analyzerSection" class="panel">
+      <div class="dropzone" id="dropzone">
+        <div style="font-weight:800; font-size:0.88rem; letter-spacing:0.1em;">↑ 匯入樂譜（圖片 / PDF 自動識譜轉簡譜）</div>
+        <div class="mono-tag">.PNG / .JPG / .WEBP · .PDF · .XML · .MUSICXML · .MID</div>
+        <div class="row">
+          <select id="omrKindSelect" title="圖片/PDF 辨識模式">
+            <option value="auto">自動判別 (五線譜 / 簡譜)</option>
+            <option value="staff">強制辨識為：五線譜</option>
+            <option value="jianpu">強制辨識為：簡譜</option>
+          </select>
+          <button class="btn btn-mint btn-xs" id="btnPickFile" type="button">選擇檔案</button>
+          <button class="btn btn-xs" id="btnLoadDemo" type="button">載入範例</button>
+        </div>
+        <input type="file" id="scoreInput" accept=".pdf,.png,.jpg,.jpeg,.webp,.xml,.musicxml,.mid,.midi" class="hidden" />
+      </div>
+
+      <div id="omrStatusBox" class="omr-status-bar hidden">
+        <span id="omrStatusText">準備中...</span>
+        <button class="btn btn-xs hidden" id="btnRetryOmr" type="button">↻ 重新辨識</button>
+      </div>
+
+      <div id="analyzerOutput" class="hidden" style="margin-top:10px;">
+        <div class="row between" style="margin-bottom:8px;">
+          <div class="row" id="scoreMetaChips"></div>
+          <div class="row">
+            <select id="trackSelect"></select>
+            <button class="btn btn-mint btn-xs" id="btnPlayAllBars">▶ 全曲</button>
+            <button class="btn btn-xs" id="btnStopScore">■</button>
+            <button class="btn btn-xs" id="btnExportXml">↓ 匯出XML</button>
+            <button class="btn btn-xs" id="btnQuizFromScore">出題</button>
+          </div>
+        </div>
+        <div class="dist-bar" id="distBar"></div>
+        <div class="dist-legend" id="distLegend"></div>
+        <div class="grid-2" id="measuresGrid"></div>
+      </div>
+    </section>
+
+    <!-- 2. 測驗 -->
+    <section id="quizSection" class="panel hidden">
+      <div class="row between" style="margin-bottom:10px;">
+        <div class="row">
+          <button class="btn btn-mint" id="btnPlayQuestion">▶ 播放</button>
+          <button class="btn" id="btnStopAudio">■</button>
+          <button class="btn" id="btnNextQuestion">⏭</button>
+          <span class="mono-tag hidden" id="customQuizBadge">SCORE</span>
+          <button class="btn btn-xs hidden" id="btnExitCustomQuiz">預設</button>
+        </div>
+        <div class="row">
+          <span class="mono-tag"><b id="statCorrect">0</b>/<b id="statTotal">0</b></span>
+          <span class="mono-tag">×<b id="statStreak">0</b></span>
+        </div>
+      </div>
+      <div class="grid-2" id="optionsGrid"></div>
+      <div class="result-strip" id="feedbackBanner">
+        <span id="feedbackText"></span>
+        <button class="btn btn-mint btn-xs" id="btnBannerNext">NEXT ➜</button>
+      </div>
+    </section>
+
+    <!-- 3. 圖鑑 -->
+    <section id="librarySection" class="panel hidden">
+      <div class="row between" style="margin-bottom:10px;">
+        <span class="mono-tag">PATTERNS</span>
+        <button class="btn btn-xs" id="btnLibStop">■</button>
+      </div>
+      <div class="grid-2" id="libraryList"></div>
+    </section>
+  </div>
+
+  <script>
+    // ==========================================
+    // 1. 節奏資料庫 (測驗與圖鑑)
+    // ==========================================
+    const CATEGORIES = {
+      basic: '基礎', syncopation: '切分', sixteenth: '16分', dotted: '附點', offbeat: '反拍'
+    };
+
+    const n = (dur) => ({ t: 'n', dur });
+    const r = (dur) => ({ t: 'r', dur });
+    const half = () => ({ t: 'half', dur: 2 });
+    const dotQ = () => ({ t: 'dotQ', dur: 1.5 });
+    const dot8 = () => ({ t: 'dot8', dur: 0.75 });
+    const u1 = (...items) => ({ t: 'u1', items });
+    const u2 = (...items) => ({ t: 'u2', items });
+    const sync = (...items) => ({ t: 'sync', items });
+    const tri = () => ({ t: 'tri', items: [n(1/3), n(1/3), n(1/3)] });
+
+    const PATTERNS = [
+      { id: 'b1', cat: 'basic', name: '四分基本', groups: [n(1), n(1), n(1), n(1)] },
+      { id: 'b2', cat: 'basic', name: '二分+四分', groups: [half(), n(1), n(1)] },
+      { id: 'b3', cat: 'basic', name: '前八後四', groups: [u1(n(0.5), n(0.5)), n(1), u1(n(0.5), n(0.5)), n(1)] },
+      { id: 'b4', cat: 'basic', name: '前四後八', groups: [n(1), u1(n(0.5), n(0.5)), n(1), u1(n(0.5), n(0.5))] },
+      { id: 'b5', cat: 'basic', name: '八分+休止', groups: [u1(n(0.5), n(0.5)), u1(n(0.5), n(0.5)), n(1), r(1)] },
+      { id: 's1', cat: 'syncopation', name: '小切分(前)', groups: [sync(u1(n(0.5)), n(1), u1(n(0.5))), n(1), n(1)] },
+      { id: 's2', cat: 'syncopation', name: '小切分(後)', groups: [n(1), n(1), sync(u1(n(0.5)), n(1), u1(n(0.5)))] },
+      { id: 's3', cat: 'syncopation', name: '雙小切分', groups: [sync(u1(n(0.5)), n(1), u1(n(0.5))), sync(u1(n(0.5)), n(1), u1(n(0.5)))] },
+      { id: 's4', cat: 'syncopation', name: '置中小切分', groups: [n(1), sync(u1(n(0.5)), n(1), u1(n(0.5))), n(1)] },
+      { id: 's5', cat: 'syncopation', name: '大切分', groups: [n(1), half(), n(1)] },
+      { id: 's6', cat: 'syncopation', name: '大切分+八分', groups: [n(1), half(), u1(n(0.5), n(0.5))] },
+      { id: 'x1', cat: 'sixteenth', name: '16分切分', groups: [n(1), u1(u2(n(0.25)), n(0.5), u2(n(0.25))), n(1), n(1)] },
+      { id: 'x2', cat: 'sixteenth', name: '雙16分切分', groups: [u1(u2(n(0.25)), n(0.5), u2(n(0.25))), n(1), u1(u2(n(0.25)), n(0.5), u2(n(0.25))), n(1)] },
+      { id: 'x3', cat: 'sixteenth', name: '前8後16', groups: [n(1), u1(n(0.5), u2(n(0.25), n(0.25))), n(1), u1(n(0.5), u2(n(0.25), n(0.25)))] },
+      { id: 'x4', cat: 'sixteenth', name: '前16後8', groups: [n(1), u1(u2(n(0.25), n(0.25)), n(0.5)), n(1), u1(u2(n(0.25), n(0.25)), n(0.5))] },
+      { id: 'x5', cat: 'sixteenth', name: '16分+切分', groups: [u1(u2(n(0.25), n(0.25), n(0.25), n(0.25))), sync(u1(n(0.5)), n(1), u1(n(0.5))), n(1)] },
+      { id: 'd1', cat: 'dotted', name: '大附點', groups: [sync(dotQ(), u1(n(0.5))), n(1), n(1)] },
+      { id: 'd2', cat: 'dotted', name: '雙大附點', groups: [sync(dotQ(), u1(n(0.5))), sync(dotQ(), u1(n(0.5)))] },
+      { id: 'd3', cat: 'dotted', name: '反大附點', groups: [sync(u1(n(0.5)), dotQ()), n(1), n(1)] },
+      { id: 'd4', cat: 'dotted', name: '小附點', groups: [n(1), u1(dot8(), u2(n(0.25))), n(1), u1(dot8(), u2(n(0.25)))] },
+      { id: 'd5', cat: 'dotted', name: '反小附點', groups: [n(1), u1(u2(n(0.25)), dot8()), n(1), u1(u2(n(0.25)), dot8())] },
+      { id: 'o1', cat: 'offbeat', name: '連續反拍', groups: [u1(r(0.5), n(0.5)), u1(r(0.5), n(0.5)), u1(r(0.5), n(0.5)), u1(r(0.5), n(0.5))] },
+      { id: 'o2', cat: 'offbeat', name: '正反交替', groups: [n(1), u1(r(0.5), n(0.5)), n(1), u1(r(0.5), n(0.5))] },
+      { id: 'o3', cat: 'offbeat', name: '反拍起手', groups: [u1(r(0.5), n(0.5)), n(1), u1(n(0.5), n(0.5)), n(1)] },
+      { id: 'o4', cat: 'offbeat', name: '三連音', groups: [n(1), tri(), n(1), n(1)] },
+      { id: 'o5', cat: 'offbeat', name: '三連+八分', groups: [tri(), u1(n(0.5), n(0.5)), tri(), n(1)] }
+    ];
+
+    // ==========================================
+    // 2. 簡譜編譯與渲染
+    // ==========================================
+    const FIFTHS_TONIC_PC = {
+      '-7': 11, '-6': 6, '-5': 1, '-4': 8, '-3': 3, '-2': 10, '-1': 5,
+      '0': 0, '1': 7, '2': 2, '3': 9, '4': 4, '5': 11, '6': 6, '7': 1
+    };
+    const KEY_NAMES = {
+      '-7': 'Cb', '-6': 'Gb', '-5': 'Db', '-4': 'Ab', '-3': 'Eb', '-2': 'Bb', '-1': 'F',
+      '0': 'C', '1': 'G', '2': 'D', '3': 'A', '4': 'E', '5': 'B', '6': 'F#', '7': 'C#'
+    };
+
+    function midiToJianpuInfo(midi, keyFifths = 0) {
+      const tonicPC = FIFTHS_TONIC_PC[String(keyFifths)] ?? 0;
+      const preferFlat = keyFifths < 0;
+      const tonicBase = 60 + (tonicPC > 6 ? tonicPC - 12 : tonicPC);
+      const diff = midi - tonicBase;
+      const oct = Math.floor(diff / 12);
+      const semi = ((diff % 12) + 12) % 12;
+
+      const sharpMap = [['1',''],['1','#'],['2',''],['2','#'],['3',''],['4',''],['4','#'],['5',''],['5','#'],['6',''],['6','#'],['7','']];
+      const flatMap  = [['1',''],['2','b'],['2',''],['3','b'],['3',''],['4',''],['5','b'],['5',''],['6','b'],['6',''],['7','b'],['7','']];
+      const [digit, acc] = (preferFlat ? flatMap : sharpMap)[semi];
+      return { digit, acc, oct };
+    }
+
+    function midiToJianpuHtml(midi, keyFifths = 0) {
+      const { digit, acc, oct } = midiToJianpuInfo(midi, keyFifths);
+      let octTop = '', octBot = '';
+      if (oct > 0) octTop = `<span class="j-oct-top">${'<span></span>'.repeat(Math.min(2, oct))}</span>`;
+      else if (oct < 0) octBot = `<span class="j-oct-bot">${'<span></span>'.repeat(Math.min(2, -oct))}</span>`;
+      return `<span class="j-pitch-wrap">${acc ? `<span class="j-acc">${acc}</span>` : ''}${octTop}<span>${digit}</span>${octBot}</span>`;
+    }
+
+    function renderEventCoreHtml(ev, symMode, keyFifths) {
+      if (ev.type === 'rest') return '0';
+      if (symMode === 'X') return 'X';
+      if (symMode === '1') return '1';
+      const midis = ev.midis && ev.midis.length ? ev.midis : [ev.midi || 60];
+      if (midis.length === 1) return midiToJianpuHtml(midis[0], keyFifths);
+      const sorted = [...midis].sort((a, b) => b - a).slice(0, 4);
+      return `<span class="j-chord">${sorted.map(m => midiToJianpuHtml(m, keyFifths)).join('')}</span>`;
+    }
+
+    function compileBuiltIn(pattern, symMode = 'pitch', barIdx = 0) {
+      const events = [];
+      let cursor = 0;
+      const ch = symMode === 'X' ? 'X' : '1';
+
+      function walk(tok) {
+        if (tok.t === 'n') {
+          const idx = events.length;
+          events.push({ start: cursor, dur: tok.dur, type: 'note', midis: [60] });
+          cursor += tok.dur;
+          return `<span class="j-ev" data-bar="${barIdx}" data-v="0" data-ev="${idx}">${ch}</span>`;
+        }
+        if (tok.t === 'r') {
+          const idx = events.length;
+          events.push({ start: cursor, dur: tok.dur, type: 'rest' });
+          cursor += tok.dur;
+          return `<span class="j-ev j-rest" data-bar="${barIdx}" data-v="0" data-ev="${idx}">0</span>`;
+        }
+        if (tok.t === 'half') {
+          const idx = events.length;
+          events.push({ start: cursor, dur: 2, type: 'note', midis: [60] });
+          cursor += 2;
+          return `<span class="j-ev" data-bar="${barIdx}" data-v="0" data-ev="${idx}">${ch}<span class="j-dash">-</span></span>`;
+        }
+        if (tok.t === 'dotQ') {
+          const idx = events.length;
+          events.push({ start: cursor, dur: 1.5, type: 'note', midis: [60] });
+          cursor += 1.5;
+          return `<span class="j-ev" data-bar="${barIdx}" data-v="0" data-ev="${idx}">${ch}<span class="j-dot">·</span></span>`;
+        }
+        if (tok.t === 'dot8') {
+          const idx = events.length;
+          events.push({ start: cursor, dur: 0.75, type: 'note', midis: [60] });
+          cursor += 0.75;
+          return `<span class="j-ev" data-bar="${barIdx}" data-v="0" data-ev="${idx}">${ch}<span class="j-dot">·</span></span>`;
+        }
+        if (tok.t === 'u1') return `<span class="u1">${tok.items.map(walk).join('')}</span>`;
+        if (tok.t === 'u2') return `<span class="u2-inner">${tok.items.map(walk).join('')}</span>`;
+        if (tok.t === 'sync') return `<span class="j-group-tight">${tok.items.map(walk).join('')}</span>`;
+        if (tok.t === 'tri') return `<span class="triplet"><span class="u1">${tok.items.map(walk).join('')}</span></span>`;
+        return '';
+      }
+      return { html: `<div class="jianpu-bar">${pattern.groups.map(walk).join('')}</div>`, events, barBeats: 4 };
+    }
+
+    function renderEventsToJianpu(events, barBeats = 4, symMode = 'pitch', keyFifths = 0, voiceIdx = 0, barIdx = 0) {
+      const approx = (a, b) => Math.abs(a - b) < 0.04;
+
+      function formatSingle(ev, idx, inU1 = false) {
+        const core = renderEventCoreHtml(ev, symMode, keyFifths);
+        const cls = ev.type === 'rest' ? 'j-ev j-rest' : 'j-ev';
+        const d = ev.dur, attr = `data-bar="${barIdx}" data-v="${voiceIdx}" data-ev="${idx}"`;
+
+        if (approx(d, 4)) return `<span class="${cls}" ${attr}>${core}<span class="j-dash">- - -</span></span>`;
+        if (approx(d, 3)) return `<span class="${cls}" ${attr}>${core}<span class="j-dash">- -</span></span>`;
+        if (approx(d, 2)) return `<span class="${cls}" ${attr}>${core}<span class="j-dash">-</span></span>`;
+        if (approx(d, 1.5)) return `<span class="${cls}" ${attr}>${core}<span class="j-dot">·</span></span>`;
+        if (approx(d, 1)) return `<span class="${cls}" ${attr}>${core}</span>`;
+        if (approx(d, 0.75)) { const el = `<span class="${cls}" ${attr}>${core}<span class="j-dot">·</span></span>`; return inU1 ? el : `<span class="u1">${el}</span>`; }
+        if (approx(d, 0.5) || approx(d, 1/3)) { const el = `<span class="${cls}" ${attr}>${core}</span>`; return inU1 ? el : `<span class="u1">${el}</span>`; }
+        if (approx(d, 0.25)) { const el = `<span class="${cls}" ${attr}>${core}</span>`; return inU1 ? `<span class="u2-inner">${el}</span>` : `<span class="u1"><span class="u2-inner">${el}</span></span>`; }
+        if (d > 2) return `<span class="${cls}" ${attr}>${core}<span class="j-dash">-</span><span class="j-dot">·</span></span>`;
+        if (d > 1) return `<span class="${cls}" ${attr}>${core}<span class="j-tie">⌒</span></span>`;
+        return inU1 ? `<span class="${cls}" ${attr}>${core}</span>` : `<span class="u1"><span class="u2-inner">${core}</span></span>`;
+      }
+
+      const out = [];
+      let i = 0;
+      while (i < events.length) {
+        const ev = events[i], beatIdx = Math.floor(ev.start + 0.01);
+        if (approx(ev.dur, 1/3) && i + 2 < events.length && approx(events[i+1].dur, 1/3) && approx(events[i+2].dur, 1/3)) {
+          out.push(`<span class="triplet"><span class="u1">${[0,1,2].map(k => formatSingle(events[i+k], i+k, true)).join('')}</span></span>`);
+          i += 3; continue;
+        }
+        if (ev.dur < 0.99 && ev.start + ev.dur <= beatIdx + 1.02) {
+          const beamGroup = [];
+          while (i < events.length && events[i].dur < 0.99 && Math.floor(events[i].start + 0.01) === beatIdx && events[i].start + events[i].dur <= beatIdx + 1.02) {
+            beamGroup.push({ ev: events[i], idx: i }); i++;
+          }
+          let beamHtml = '', j = 0;
+          while (j < beamGroup.length) {
+            if (approx(beamGroup[j].ev.dur, 0.25)) {
+              const u2Items = [];
+              while (j < beamGroup.length && approx(beamGroup[j].ev.dur, 0.25)) {
+                const { ev: e2, idx: idx2 } = beamGroup[j];
+                const core2 = renderEventCoreHtml(e2, symMode, keyFifths);
+                u2Items.push(`<span class="${e2.type==='rest'?'j-ev j-rest':'j-ev'}" data-bar="${barIdx}" data-v="${voiceIdx}" data-ev="${idx2}">${core2}</span>`);
+                j++;
+              }
+              beamHtml += `<span class="u2-inner">${u2Items.join('')}</span>`;
+            } else { beamHtml += formatSingle(beamGroup[j].ev, beamGroup[j].idx, true); j++; }
+          }
+          out.push(`<span class="u1">${beamHtml}</span>`); continue;
+        }
+        out.push(formatSingle(ev, i, false)); i++;
+      }
+      return { html: `<div class="jianpu-bar">${out.join('')}</div>`, events, barBeats };
+    }
+
+    function renderPattern(pat, symMode, barIdx = 0) {
+      if (pat.voices) {
+        const rowsHtml = pat.voices.map((v, vIdx) => {
+          const res = renderEventsToJianpu(v.events, pat.barBeats, symMode, pat.keyFifths || 0, vIdx, barIdx);
+          return pat.voices.length === 1 ? res.html : `<div class="voice-row"><span class="voice-lbl">${v.label || `V${vIdx+1}`}</span>${res.html}</div>`;
+        }).join('');
+        return { html: `<div class="voice-rows">${rowsHtml}</div>`, barBeats: pat.barBeats };
+      }
+      if (pat.events) return renderEventsToJianpu(pat.events, pat.barBeats || 4, symMode, pat.keyFifths || 0, 0, barIdx);
+      return compileBuiltIn(pat, symMode, barIdx);
+    }
+
+    // ==========================================
+    // 3. Lookahead 音訊引擎
+    // ==========================================
+    let audioCtx = null, playbackSession = 0, schedulerTimer = null, rafId = null, activeAudioNodes = [];
+
+    function ensureAudioCtx() {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+    }
+
+    function stopPlayback() {
+      playbackSession++;
+      if (schedulerTimer) { clearInterval(schedulerTimer); schedulerTimer = null; }
+      if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+      activeAudioNodes.forEach(n => { try { n.stop(); } catch (e) {} try { n.disconnect(); } catch (e) {} });
+      activeAudioNodes = [];
+      resetVisuals();
+    }
+
+    function scheduleMetroClick(time, isAccent) {
+      const osc = audioCtx.createOscillator(), gain = audioCtx.createGain();
+      osc.type = 'sine'; osc.frequency.setValueAtTime(isAccent ? 1480 : 960, time);
+      gain.gain.setValueAtTime(0.0001, time);
+      gain.gain.linearRampToValueAtTime(isAccent ? 0.2 : 0.11, time + 0.002);
+      gain.gain.exponentialRampToValueAtTime(0.0001, time + 0.04);
+      osc.connect(gain); gain.connect(audioCtx.destination);
+      osc.start(time); osc.stop(time + 0.045);
+      activeAudioNodes.push(osc);
+    }
+
+    function schedulePolyVoiceNote(time, durSec, soundType, midis, polyScale = 1) {
+      const notes = (midis && midis.length ? midis : [60]).slice(0, 6);
+      const gainScale = 1 / Math.sqrt(notes.length * polyScale);
+      if (soundType === 'wood') {
+        const osc = audioCtx.createOscillator(), gain = audioCtx.createGain();
+        osc.type = 'triangle'; osc.frequency.setValueAtTime(780, time); osc.frequency.exponentialRampToValueAtTime(420, time + 0.035);
+        gain.gain.setValueAtTime(0.0001, time); gain.gain.linearRampToValueAtTime(0.45 * gainScale, time + 0.004);
+        gain.gain.exponentialRampToValueAtTime(0.0001, time + 0.085);
+        osc.connect(gain); gain.connect(audioCtx.destination);
+        osc.start(time); osc.stop(time + 0.095); activeAudioNodes.push(osc); return;
+      }
+      const playDur = Math.max(0.07, durSec * 0.9);
+      notes.forEach(midi => {
+        const freq = 440 * Math.pow(2, (midi - 69) / 12);
+        const osc = audioCtx.createOscillator(), gain = audioCtx.createGain();
+        if (soundType === 'synth') {
+          const filter = audioCtx.createBiquadFilter();
+          osc.type = 'sawtooth'; osc.frequency.setValueAtTime(freq, time);
+          filter.type = 'lowpass'; filter.frequency.setValueAtTime(2200, time); filter.frequency.exponentialRampToValueAtTime(750, time + Math.min(0.22, playDur));
+          gain.gain.setValueAtTime(0.0001, time); gain.gain.linearRampToValueAtTime(0.22 * gainScale, time + 0.008);
+          gain.gain.exponentialRampToValueAtTime(0.12 * gainScale, time + Math.min(0.14, playDur * 0.6));
+          gain.gain.exponentialRampToValueAtTime(0.0001, time + playDur);
+          osc.connect(filter); filter.connect(gain);
+        } else {
+          osc.type = 'triangle'; osc.frequency.setValueAtTime(freq, time);
+          gain.gain.setValueAtTime(0.0001, time); gain.gain.linearRampToValueAtTime(0.32 * gainScale, time + 0.006);
+          gain.gain.exponentialRampToValueAtTime(0.16 * gainScale, time + Math.min(0.12, playDur * 0.5));
+          gain.gain.exponentialRampToValueAtTime(0.0001, time + playDur);
+          osc.connect(gain);
+        }
+        gain.connect(audioCtx.destination); osc.start(time); osc.stop(time + playDur + 0.02); activeAudioNodes.push(osc);
+      });
+    }
+
+    function updateLedCount(beatCount) {
+      const container = document.getElementById('beatDots');
+      const count = Math.max(1, Math.min(8, Math.round(beatCount)));
+      if (container.children.length !== count) container.innerHTML = Array.from({ length: count }, () => `<div class="led"></div>`).join('');
+    }
+
+    function playBars(bars, cardElements = [], highlightSingleContainer = null) {
+      if (!bars || bars.length === 0) return;
+      ensureAudioCtx(); stopPlayback();
+
+      const mySession = playbackSession, bpm = Number(document.getElementById('bpmRange').value), beatSec = 60 / bpm;
+      const useCountIn = document.getElementById('chkCountIn').checked, useMetro = document.getElementById('chkMetro').checked;
+      const soundType = document.getElementById('soundSelect').value, symMode = document.getElementById('symbolSelect').value;
+
+      const firstLedBeats = bars[0].ledBeats || Math.round(bars[0].barBeats || 4);
+      updateLedCount(firstLedBeats);
+      const countInBeats = useCountIn ? firstLedBeats : 0, startTime = audioCtx.currentTime + 0.07;
+      const audioQueue = [], barTimeline = [];
+
+      for (let b = 0; b < countInBeats; b++) audioQueue.push({ time: startTime + b * beatSec, kind: 'metro', accent: b === 0 });
+      let cursorTime = startTime + countInBeats * beatSec;
+
+      bars.forEach((bar, barIdx) => {
+        const bBeats = bar.barBeats || 4, ledBeats = bar.ledBeats || Math.round(bBeats), ledUnit = bBeats / ledBeats;
+        const barStart = cursorTime, barEnd = barStart + bBeats * beatSec;
+        if (useMetro) for (let b = 0; b < ledBeats; b++) audioQueue.push({ time: barStart + b * ledUnit * beatSec, kind: 'metro', accent: b === 0 });
+
+        let voices = bar.voices;
+        if (!voices) voices = [{ events: (bar.events ? { events: bar.events } : compileBuiltIn(bar, symMode, barIdx)).events }];
+        const polyScale = Math.max(1, voices.length);
+        voices.forEach(v => v.events.forEach(ev => {
+          if (ev.type === 'note') audioQueue.push({ time: barStart + ev.start * beatSec, durSec: ev.dur * beatSec, kind: 'note', midis: ev.midis || [ev.midi || 60], polyScale });
+        }));
+        barTimeline.push({ barIdx, barStart, barEnd, bBeats, ledBeats, ledUnit, voices });
+        cursorTime = barEnd;
+      });
+
+      audioQueue.sort((a, b) => a.time - b.time);
+      let qIdx = 0; const totalEnd = cursorTime;
+      function scheduleAhead() {
+        if (mySession !== playbackSession) return;
+        const horizon = audioCtx.currentTime + 0.28;
+        while (qIdx < audioQueue.length && audioQueue[qIdx].time <= horizon) {
+          const it = audioQueue[qIdx++];
+          if (it.kind === 'metro') scheduleMetroClick(it.time, it.accent);
+          else schedulePolyVoiceNote(it.time, it.durSec, soundType, it.midis, it.polyScale);
+        }
+        if (activeAudioNodes.length > 160) activeAudioNodes = activeAudioNodes.slice(-80);
+      }
+      scheduleAhead(); schedulerTimer = setInterval(scheduleAhead, 60);
+
+      const statusEl = document.getElementById('beatStatus');
+      let lastScrolledBar = -1;
+      function tick() {
+        if (mySession !== playbackSession) return;
+        const now = audioCtx.currentTime;
+        if (now >= totalEnd + 0.06) { stopPlayback(); return; }
+
+        const leds = document.querySelectorAll('#beatDots .led');
+        leds.forEach(l => l.classList.remove('countin', 'playing'));
+        cardElements.forEach(c => c.classList.remove('playing-card'));
+        document.querySelectorAll('.j-ev.active-note').forEach(el => el.classList.remove('active-note'));
+
+        if (now < barTimeline[0].barStart) {
+          const idx = Math.floor((now - startTime) / beatSec);
+          if (idx >= 0 && idx < leds.length) leds[idx].classList.add('countin');
+          statusEl.textContent = 'COUNT';
+        } else {
+          const seg = barTimeline.find(s => now >= s.barStart && now < s.barEnd);
+          if (seg) {
+            updateLedCount(seg.ledBeats);
+            const curLeds = document.querySelectorAll('#beatDots .led');
+            const elapsedBeats = (now - seg.barStart) / beatSec, ledIdx = Math.floor(elapsedBeats / seg.ledUnit);
+            if (ledIdx >= 0 && ledIdx < curLeds.length) curLeds[ledIdx].classList.add('playing');
+            statusEl.textContent = bars.length > 1 ? `B.${seg.barIdx + 1}` : `B.${Math.min(curLeds.length, ledIdx + 1)}`;
+            const container = highlightSingleContainer || cardElements[seg.barIdx];
+            if (container) {
+              if (cardElements[seg.barIdx]) {
+                cardElements[seg.barIdx].classList.add('playing-card');
+                if (bars.length > 1 && lastScrolledBar !== seg.barIdx) {
+                  lastScrolledBar = seg.barIdx; cardElements[seg.barIdx].scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                }
+              }
+              seg.voices.forEach((v, vIdx) => v.events.forEach((ev, evIdx) => {
+                if (elapsedBeats >= ev.start - 0.02 && elapsedBeats < ev.start + ev.dur - 0.02) {
+                  const barMatch = container.querySelector(`[data-bar="${seg.barIdx}"]`) ? `[data-bar="${seg.barIdx}"]` : '';
+                  const target = container.querySelector(`.j-ev${barMatch}[data-v="${vIdx}"][data-ev="${evIdx}"]`);
+                  if (target) target.classList.add('active-note');
+                }
+              }));
+            }
+          }
+        }
+        rafId = requestAnimationFrame(tick);
+      }
+      rafId = requestAnimationFrame(tick);
+    }
+
+    function resetVisuals() {
+      document.querySelectorAll('#beatDots .led').forEach(l => l.classList.remove('countin', 'playing'));
+      document.getElementById('beatStatus').textContent = 'READY';
+      document.querySelectorAll('.j-ev.active-note').forEach(el => el.classList.remove('active-note'));
+      document.querySelectorAll('.playing-card').forEach(el => el.classList.remove('playing-card'));
+    }
+
+    // ==========================================
+    // 4. MIDI & MusicXML 解析 & 匯出
+    // ==========================================
+    function analyzeVoicesTags(voices, barBeats = 4) {
+      const approx = (a, b) => Math.abs(a - b) < 0.06;
+      let hasSync = false, hasDot = false, has16 = false, hasTri = false, hasOff = false;
+      voices.forEach(v => v.events.forEach((ev, idx) => {
+        if (ev.type === 'rest') { if (approx(ev.start, Math.round(ev.start)) && approx(ev.dur, 0.5) && v.events[idx + 1]?.type === 'note') hasOff = true; return; }
+        const startFrac = ev.start - Math.floor(ev.start + 0.02), end = ev.start + ev.dur, nextBeat = Math.floor(ev.start + 0.02) + 1;
+        if (startFrac > 0.1 && startFrac < 0.9 && end > nextBeat + 0.05) hasSync = true;
+        if (approx(startFrac, 0.25) && approx(ev.dur, 0.5)) hasSync = true;
+        if (barBeats >= 4 && approx(ev.start, 1) && ev.dur >= 1.95) hasSync = true;
+        if (approx(ev.dur, 1.5) || approx(ev.dur, 0.75) || approx(ev.dur, 3)) hasDot = true;
+        if (approx(ev.dur, 0.25)) has16 = true;
+        if (approx(ev.dur, 1/3) || approx(ev.dur, 2/3)) hasTri = true;
+      }));
+      const tags = [];
+      if (hasSync) tags.push({ label: '切分', cls: 'tag-sync' });
+      if (hasOff) tags.push({ label: '反拍', cls: 'tag-off' });
+      if (hasDot) tags.push({ label: '附點', cls: 'tag-dot' });
+      if (has16) tags.push({ label: '16分', cls: 'tag-16' });
+      if (hasTri) tags.push({ label: '3連', cls: 'tag-dot' });
+      return tags;
+    }
+
+    function normalizePolyBarEvents(rawNotes, barBeats) {
+      const grid16 = 0.25, gridTri = 1 / 3;
+      const quantize = (val) => {
+        const q16 = Math.round(val / grid16) * grid16, qTri = Math.round(val / gridTri) * gridTri;
+        return Math.abs(val - qTri) + 0.01 < Math.abs(val - q16) ? qTri : q16;
+      };
+      const cleaned = rawNotes
+        .map(x => ({
+          start: Math.max(0, quantize(x.start)),
+          dur: Math.max(0.25, quantize(x.dur)),
+          midis: x.midis ? [...x.midis] : [x.midi || 60]
+        }))
+        .filter(x => x.start < barBeats - 0.05)
+        .sort((a, b) => a.start - b.start);
+
+      const grouped = [];
+      cleaned.forEach(item => {
+        const prev = grouped[grouped.length - 1];
+        if (prev && Math.abs(prev.start - item.start) < 0.06) {
+          item.midis.forEach(m => { if (!prev.midis.includes(m)) prev.midis.push(m); });
+          if (item.dur > prev.dur) prev.dur = item.dur;
+        } else grouped.push(item);
+      });
+
+      const result = [];
+      let cursor = 0;
+      grouped.forEach(note => {
+        if (note.start > cursor + 0.06) { pushSplitRests(result, cursor, note.start - cursor); cursor = note.start; }
+        const avail = Math.min(note.dur, barBeats - cursor);
+        if (avail >= 0.2) {
+          result.push({ start: cursor, dur: avail, type: 'note', midis: note.midis });
+          cursor += avail;
+        }
+      });
+      if (cursor < barBeats - 0.06) pushSplitRests(result, cursor, barBeats - cursor);
+      return result;
+    }
+
+    function pushSplitRests(arr, start, totalDur) {
+      let cur = start, rem = totalDur;
+      while (rem > 0.06) {
+        const nextBeat = Math.floor(cur + 0.02) + 1, toBeat = nextBeat - cur;
+        let chunk = rem;
+        if (rem > toBeat + 0.05 && Math.abs(cur - Math.floor(cur)) > 0.05) chunk = toBeat;
+        else if (chunk > 2) chunk = 2;
+        else if (chunk > 1 && chunk < 1.95) chunk = 1;
+        arr.push({ start: cur, dur: chunk, type: 'rest' });
+        cur += chunk; rem -= chunk;
+      }
+    }
+
+    function parseMIDI(arrayBuffer) {
+      const dv = new DataView(arrayBuffer); let pos = 0;
+      const readStr = (len) => { let s = ''; for (let i = 0; i < len; i++) s += String.fromCharCode(dv.getUint8(pos++)); return s; };
+      const readVLQ = () => {
+        let val = 0;
+        while (pos < dv.byteLength) { const b = dv.getUint8(pos++); val = (val << 7) | (b & 0x7f); if ((b & 0x80) === 0) break; }
+        return val;
+      };
+      if (readStr(4) !== 'MThd') throw new Error('Invalid MIDI');
+      const hdrLen = dv.getUint32(pos); pos += 4; pos += 2;
+      const numTracks = dv.getUint16(pos); pos += 2;
+      const division = dv.getUint16(pos); pos += 2;
+      if (hdrLen > 6) pos += (hdrLen - 6);
+
+      const tempoMap = [{ tick: 0, bpm: 100 }], timeSigMap = [{ tick: 0, num: 4, den: 4 }], keySigMap = [{ tick: 0, sf: 0, mi: 0 }];
+      const rawTracks = [];
+
+      for (let t = 0; t < numTracks; t++) {
+        if (pos + 8 > dv.byteLength) break;
+        const tag = readStr(4), trkLen = dv.getUint32(pos); pos += 4;
+        const trkEnd = Math.min(dv.byteLength, pos + trkLen);
+        if (tag !== 'MTrk') { pos = trkEnd; continue; }
+        let tick = 0, runningStatus = 0, trkName = '';
+        const activeNotes = new Map(), notes = [];
+
+        while (pos < trkEnd) {
+          tick += readVLQ(); if (pos >= trkEnd) break;
+          let status = dv.getUint8(pos);
+          if (status < 0x80) status = runningStatus;
+          else { pos++; if (status < 0xf0) runningStatus = status; }
+
+          if (status === 0xff) {
+            const metaType = dv.getUint8(pos++), len = readVLQ();
+            if (metaType === 0x51 && len === 3) {
+              const us = (dv.getUint8(pos) << 16) | (dv.getUint8(pos+1) << 8) | dv.getUint8(pos+2);
+              tempoMap.push({ tick, bpm: Math.round(60000000 / us) });
+            } else if (metaType === 0x58 && len >= 2) {
+              timeSigMap.push({ tick, num: dv.getUint8(pos), den: Math.pow(2, dv.getUint8(pos + 1)) });
+            } else if (metaType === 0x59 && len >= 2) {
+              keySigMap.push({ tick, sf: dv.getInt8(pos), mi: dv.getUint8(pos + 1) });
+            } else if (metaType === 0x03) {
+              let s = ''; for (let i = 0; i < len; i++) s += String.fromCharCode(dv.getUint8(pos + i));
+              if (s.trim()) trkName = s.trim();
+            }
+            pos += len;
+          } else if (status === 0xf0 || status === 0xf7) {
+            pos += readVLQ();
+          } else {
+            const type = status & 0xf0, ch = status & 0x0f, d1 = dv.getUint8(pos++);
+            const d2 = (type === 0xc0 || type === 0xd0) ? 0 : dv.getUint8(pos++);
+            if (type === 0x90 && d2 > 0) {
+              const k = (ch << 8) | d1; if (!activeNotes.has(k)) activeNotes.set(k, []); activeNotes.get(k).push(tick);
+            } else if (type === 0x80 || (type === 0x90 && d2 === 0)) {
+              const k = (ch << 8) | d1, q = activeNotes.get(k);
+              if (q && q.length > 0) {
+                const startTick = q.shift();
+                notes.push({ startTick, durTicks: Math.max(division * 0.25, tick - startTick), midi: d1 });
+              }
+            }
+          }
+        }
+        pos = trkEnd;
+        if (notes.length > 0) rawTracks.push({ label: trkName ? trkName.slice(0, 10) : `T${rawTracks.length + 1}`, short: `T${rawTracks.length + 1}`, notes });
+      }
+      if (rawTracks.length === 0) throw new Error('No notes');
+      tempoMap.sort((a, b) => a.tick - b.tick); timeSigMap.sort((a, b) => a.tick - b.tick); keySigMap.sort((a, b) => a.tick - b.tick);
+      const getAt = (arr, tick) => { let cur = arr[0]; for (const item of arr) { if (item.tick <= tick + 10) cur = item; else break; } return cur; };
+
+      let maxTick = 0;
+      for (const rt of rawTracks) {
+        for (const nt of rt.notes) {
+          const endT = nt.startTick + nt.durTicks;
+          if (endT > maxTick) maxTick = endT;
+        }
+      }
+      const tol = division * 0.08, combinedBars = [];
+      let barTick = 0, barIdx = 0;
+
+      while (barTick < maxTick && barIdx < 500) {
+        const ts = getAt(timeSigMap, barTick), ks = getAt(keySigMap, barTick);
+        const barBeats = ts.num * (4 / ts.den), barTicks = barBeats * division;
+        const voices = rawTracks.map(rt => {
+          const inBar = rt.notes
+            .filter(n => n.startTick >= barTick - tol && n.startTick < barTick + barTicks - tol)
+            .map(n => ({ start: (n.startTick - barTick) / division, dur: n.durTicks / division, midis: [n.midi] }));
+          return { label: rt.short, events: normalizePolyBarEvents(inBar, barBeats) };
+        });
+        if (voices.some(v => v.events.some(e => e.type === 'note')) || barIdx === 0) {
+          combinedBars.push({ id: `midi_bar_${barIdx}`, name: `#${barIdx + 1}`, barBeats, ledBeats: ts.num, timeSig: `${ts.num}/${ts.den}`, keyFifths: ks.sf, voices, tags: analyzeVoicesTags(voices, barBeats) });
+        }
+        barTick += barTicks; barIdx++;
+      }
+
+      const trackViews = [{ name: `ALL (${rawTracks.length})`, bars: combinedBars }];
+      if (rawTracks.length > 1) {
+        rawTracks.forEach((rt, idx) => trackViews.push({
+          name: `${rt.short} · ${rt.label}`,
+          bars: combinedBars.map(b => ({ ...b, voices: [b.voices[idx]], tags: analyzeVoicesTags([b.voices[idx]], b.barBeats) }))
+        }));
+      }
+      const initBpm = tempoMap.find(x => x.tick === 0)?.bpm || tempoMap[1]?.bpm || 100;
+      return { bpm: initBpm, trackViews };
+    }
+
+    function parseMusicXML(xmlText) {
+      const doc = new DOMParser().parseFromString(xmlText, 'text/xml');
+      if (doc.querySelector('parsererror')) throw new Error('Invalid XML');
+      const partNodes = Array.from(doc.querySelectorAll('part'));
+      if (partNodes.length === 0) throw new Error('No <part>');
+      let detectedBpm = 92;
+      const soundTempo = doc.querySelector('sound[tempo]'), metroVal = doc.querySelector('metronome per-minute');
+      if (soundTempo) detectedBpm = Math.round(Number(soundTempo.getAttribute('tempo')) || 92);
+      else if (metroVal) detectedBpm = Math.round(Number(metroVal.textContent) || 92);
+
+      const partData = partNodes.map((partEl, pIdx) => {
+        let divisions = 1, beats = 4, beatType = 4, fifths = 0;
+        const measures = [];
+        partEl.querySelectorAll(':scope > measure').forEach(mEl => {
+          const divEl = mEl.querySelector('attributes > divisions'); if (divEl) divisions = Number(divEl.textContent) || divisions;
+          const timeEl = mEl.querySelector('attributes > time');
+          if (timeEl) { beats = Number(timeEl.querySelector('beats')?.textContent) || beats; beatType = Number(timeEl.querySelector('beat-type')?.textContent) || beatType; }
+          const keyEl = mEl.querySelector('attributes > key > fifths'); if (keyEl) fifths = Number(keyEl.textContent) || 0;
+          const barBeats = beats * (4 / beatType), voiceMap = new Map();
+          let cursor = 0;
+
+          Array.from(mEl.children).forEach(child => {
+            if (child.tagName === 'backup') cursor -= Number(child.querySelector('duration')?.textContent || 0) / divisions;
+            else if (child.tagName === 'forward') cursor += Number(child.querySelector('duration')?.textContent || 0) / divisions;
+            else if (child.tagName === 'note') {
+              if (child.querySelector('grace')) return;
+              const staff = child.querySelector('staff')?.textContent || '1', voice = child.querySelector('voice')?.textContent || '1';
+              const vKey = `${pIdx + 1}-${staff}-${voice}`;
+              if (!voiceMap.has(vKey)) voiceMap.set(vKey, []);
+              const list = voiceMap.get(vKey);
+              const dur = Number(child.querySelector('duration')?.textContent || 0) / divisions;
+              const isChord = !!child.querySelector('chord'), isRest = !!child.querySelector('rest'), isTieStop = !!child.querySelector('tie[type="stop"]');
+              let midi = 60;
+              const pitchEl = child.querySelector('pitch');
+              if (pitchEl) {
+                const stepMap = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
+                midi = (Number(pitchEl.querySelector('octave')?.textContent || 4) + 1) * 12 + (stepMap[pitchEl.querySelector('step')?.textContent || 'C'] ?? 0) + Number(pitchEl.querySelector('alter')?.textContent || 0);
+              }
+              if (isChord && list.length > 0 && !isRest) list[list.length - 1].midis.push(midi);
+              else if (!isRest && dur > 0) {
+                if (isTieStop && list.length > 0) list[list.length - 1].dur += dur;
+                else list.push({ start: cursor, dur, midis: [midi] });
+              }
+              if (!isChord) cursor += dur;
+            }
+          });
+          measures.push({ barBeats, beats, beatType, fifths, voiceMap });
+        });
+        return measures;
+      });
+
+      const numBars = Math.min(500, Math.max(...partData.map(m => m.length)));
+      const allVoiceKeys = [];
+      partData.forEach(pm => pm.forEach(m => { for (const k of m.voiceMap.keys()) if (!allVoiceKeys.includes(k)) allVoiceKeys.push(k); }));
+
+      const combinedBars = [];
+      for (let b = 0; b < numBars; b++) {
+        const ref = partData[0][b] || { barBeats: 4, beats: 4, beatType: 4, fifths: 0 };
+        const voices = allVoiceKeys.map((vk, idx) => {
+          let rawNotes = [];
+          partData.forEach(pm => { if (pm[b] && pm[b].voiceMap.has(vk)) rawNotes = pm[b].voiceMap.get(vk); });
+          return { label: `V${idx + 1}`, events: normalizePolyBarEvents(rawNotes, ref.barBeats) };
+        });
+        combinedBars.push({ id: `xml_bar_${b}`, name: `#${b + 1}`, barBeats: ref.barBeats, ledBeats: ref.beats, timeSig: `${ref.beats}/${ref.beatType}`, keyFifths: ref.fifths, voices, tags: analyzeVoicesTags(voices, ref.barBeats) });
+      }
+      const trackViews = [{ name: `ALL (${allVoiceKeys.length})`, bars: combinedBars }];
+      if (allVoiceKeys.length > 1) {
+        allVoiceKeys.forEach((vk, idx) => trackViews.push({
+          name: `V${idx + 1}`,
+          bars: combinedBars.map(b => ({ ...b, voices: [b.voices[idx]], tags: analyzeVoicesTags([b.voices[idx]], b.barBeats) }))
+        }));
+      }
+      return { bpm: detectedBpm, trackViews };
+    }
+
+    function exportScoreToMusicXML(bars, bpm = 92) {
+      const divs = 12;
+      const sharpSpell = [['C',0],['C',1],['D',0],['D',1],['E',0],['F',0],['F',1],['G',0],['G',1],['A',0],['A',1],['B',0]];
+      const flatSpell  = [['C',0],['D',-1],['D',0],['E',-1],['E',0],['F',0],['G',-1],['G',0],['A',-1],['A',0],['B',-1],['B',0]];
+      const numVoices = Math.max(1, bars[0]?.voices?.length || 1);
+      const kf = bars[0]?.keyFifths || 0;
+
+      let xml = `<?xml version="1.0" encoding="UTF-8"?>\n<score-partwise version="3.1">\n  <part-list><score-part id="P1"><part-name>Score</part-name></score-part></part-list>\n  <part id="P1">\n`;
+      bars.forEach((bar, bIdx) => {
+        const [bts, btp] = (bar.timeSig || '4/4').split('/');
+        xml += `    <measure number="${bIdx + 1}">\n`;
+        if (bIdx === 0) {
+          xml += `      <attributes><divisions>${divs}</divisions><key><fifths>${kf}</fifths></key><time><beats>${bts}</beats><beat-type>${btp}</beat-type></time><staves>${numVoices > 1 ? 2 : 1}</staves></attributes>\n`;
+          xml += `      <sound tempo="${bpm}"/>\n`;
+        }
+        const barDivs = Math.round((bar.barBeats || 4) * divs);
+        (bar.voices || []).forEach((v, vIdx) => {
+          if (vIdx > 0) xml += `      <backup><duration>${barDivs}</duration></backup>\n`;
+          const staff = vIdx === 0 ? 1 : 2;
+          v.events.forEach(ev => {
+            const durDivs = Math.max(1, Math.round(ev.dur * divs));
+            if (ev.type === 'rest') {
+              xml += `      <note><rest/><duration>${durDivs}</duration><voice>${vIdx + 1}</voice><staff>${staff}</staff></note>\n`;
+            } else {
+              const midis = ev.midis && ev.midis.length ? ev.midis : [60];
+              midis.forEach((m, mi) => {
+                const oct = Math.floor(m / 12) - 1;
+                const [step, alter] = (kf < 0 ? flatSpell : sharpSpell)[((m % 12) + 12) % 12];
+                xml += `      <note>${mi > 0 ? '<chord/>' : ''}<pitch><step>${step}</step>${alter ? `<alter>${alter}</alter>` : ''}<octave>${oct}</octave></pitch><duration>${durDivs}</duration><voice>${vIdx + 1}</voice><staff>${staff}</staff></note>\n`;
+              });
+            }
+          });
+        });
+        xml += `    </measure>\n`;
+      });
+      xml += `  </part>\n</score-partwise>`;
+      return xml;
+    }
+
+    // ==========================================
+    // 5. 內建 Dolce AI 識譜橋接呼叫
+    // ==========================================
+    let lastOmrFile = null;
+
+    function waitForOmrEngine() {
+      if (window.__dolceOMR) return Promise.resolve(window.__dolceOMR);
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('識譜引擎載入逾時，請重新整理頁面')), 20000);
+        window.addEventListener('dolce-omr-ready', () => {
+          clearTimeout(timer);
+          resolve(window.__dolceOMR);
+        }, { once: true });
+      });
+    }
+
+    function setOmrStatus(msg, state = '') {
+      const box = document.getElementById('omrStatusBox');
+      const txt = document.getElementById('omrStatusText');
+      const retry = document.getElementById('btnRetryOmr');
+      box.className = `omr-status-bar ${state}`.trim();
+      txt.textContent = msg;
+      retry.classList.toggle('hidden', !lastOmrFile);
+    }
+
+    async function runDolceOmr(file) {
+      lastOmrFile = file;
+      const kind = document.getElementById('omrKindSelect').value;
+      setOmrStatus('正在初始化 AI 識譜引擎...');
+      try {
+        const engine = await waitForOmrEngine();
+        const res = await engine.recognizeFileToMusicXML(file, {
+          kind,
+          onProgress: (msg) => setOmrStatus(msg),
+        });
+        analyzedScore = parseMusicXML(res.xml);
+        currentViewIdx = 0;
+        if (analyzedScore.bpm) {
+          const c = Math.max(45, Math.min(180, analyzedScore.bpm));
+          document.getElementById('bpmRange').value = c;
+          document.getElementById('bpmVal').textContent = c;
+        }
+        setOmrStatus(`✓ 辨識完成：${res.info}`, 'ok');
+        renderAnalyzedScore();
+      } catch (err) {
+        console.error(err);
+        setOmrStatus(`✕ 辨識失敗：${err.message || err}`, 'err');
+      }
+    }
+
+    // ==========================================
+    // 6. 測驗、圖鑑、樂譜 UI 控制
+    // ==========================================
+    let selectedCats = new Set(Object.keys(CATEGORIES)), currentTab = 'analyzer', currentQuestion = null, quizLocked = false;
+    let stats = { correct: 0, total: 0, streak: 0 }, analyzedScore = null, currentViewIdx = 0, customQuizPool = null;
+
+    function getQuizPool() { return (customQuizPool && customQuizPool.length >= 2) ? customQuizPool : PATTERNS.filter(p => selectedCats.has(p.cat)); }
+
+    function initCategories() {
+      const bar = document.getElementById('catBar');
+      Object.entries(CATEGORIES).forEach(([k, label]) => {
+        const btn = document.createElement('button'); btn.className = 'cat-pill active'; btn.textContent = label;
+        btn.addEventListener('click', () => {
+          if (selectedCats.has(k)) { if (selectedCats.size === 1) return; selectedCats.delete(k); btn.classList.remove('active'); }
+          else { selectedCats.add(k); btn.classList.add('active'); }
+          renderLibrary(); if (!customQuizPool) generateQuestion(false);
+        });
+        bar.appendChild(btn);
+      });
+    }
+
+    function shuffle(arr) { const a = [...arr]; for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
+
+    function generateQuestion(autoPlay = false) {
+      stopPlayback(); quizLocked = false; document.getElementById('feedbackBanner').className = 'result-strip';
+      const pool = getQuizPool(), target = pool[Math.floor(Math.random() * pool.length)];
+      const seen = new Set([renderPattern(target, '1').html]), dist = [];
+      for (const c of shuffle(pool)) { if (dist.length >= 3) break; const h = renderPattern(c, '1').html; if (!seen.has(h)) { seen.add(h); dist.push(c); } }
+      if (dist.length < 3) for (const c of shuffle(PATTERNS)) { if (dist.length >= 3) break; const h = renderPattern(c, '1').html; if (!seen.has(h)) { seen.add(h); dist.push(c); } }
+      currentQuestion = { target, options: shuffle([target, ...dist]) };
+      renderQuizOptions(); if (autoPlay) playBars([currentQuestion.target]);
+    }
+
+    function renderQuizOptions() {
+      if (!currentQuestion) return;
+      const grid = document.getElementById('optionsGrid'), sym = document.getElementById('symbolSelect').value;
+      grid.innerHTML = '';
+      ['A','B','C','D'].forEach((k, i) => {
+        const opt = currentQuestion.options[i], card = document.createElement('div'); card.className = 'pad';
+        card.innerHTML = `<span class="pad-idx">${k}</span><div class="opt-jianpu">${renderPattern(opt, sym).html}</div><div class="pad-meta hidden"></div>`;
+        card.addEventListener('click', () => handleQuizAnswer(opt));
+        grid.appendChild(card);
+      });
+    }
+
+    function handleQuizAnswer(chosen) {
+      if (quizLocked) return; quizLocked = true; stopPlayback();
+      const ok = chosen.id === currentQuestion.target.id;
+      stats.total++; if (ok) { stats.correct++; stats.streak++; } else { stats.streak = 0; }
+      document.getElementById('statCorrect').textContent = stats.correct;
+      document.getElementById('statTotal').textContent = stats.total;
+      document.getElementById('statStreak').textContent = stats.streak;
+
+      document.querySelectorAll('#optionsGrid .pad').forEach((card, i) => {
+        card.classList.add('locked');
+        const opt = currentQuestion.options[i], meta = card.querySelector('.pad-meta');
+        meta.classList.remove('hidden'); meta.innerHTML = `<span>${opt.name}</span>`;
+        const btn = document.createElement('button'); btn.className = 'btn btn-xs'; btn.textContent = '▶';
+        btn.addEventListener('click', (e) => { e.stopPropagation(); playBars([opt], [card], card.querySelector('.opt-jianpu')); });
+        meta.appendChild(btn);
+        if (opt.id === currentQuestion.target.id) card.classList.add('correct');
+        else if (opt.id === chosen.id && !ok) card.classList.add('wrong');
+        else card.classList.add('dimmed');
+      });
+
+      const banner = document.getElementById('feedbackBanner'), text = document.getElementById('feedbackText');
+      banner.className = ok ? 'result-strip show ok' : 'result-strip show err';
+      text.textContent = ok ? `✓ ${currentQuestion.target.name}` : `× ${currentQuestion.target.name}`;
+    }
+
+    function renderLibrary() {
+      const list = document.getElementById('libraryList'), sym = document.getElementById('symbolSelect').value;
+      list.innerHTML = '';
+      const tagClsMap = { syncopation: 'tag-sync', dotted: 'tag-dot', sixteenth: 'tag-16', offbeat: 'tag-off' };
+      PATTERNS.filter(p => selectedCats.has(p.cat)).forEach(pat => {
+        const card = document.createElement('div'); card.className = 'lib-card';
+        card.innerHTML = `
+          <div class="card-top">
+            <span style="font-size:0.8rem;font-weight:700;">${pat.name}</span>
+            <span class="tag ${tagClsMap[pat.cat]||''}">${CATEGORIES[pat.cat]}</span>
+          </div>
+          <div class="lib-jianpu">${renderPattern(pat, sym).html}</div>
+        `;
+        card.addEventListener('click', () => playBars([pat], [card], card.querySelector('.lib-jianpu')));
+        list.appendChild(card);
+      });
+    }
+
+    function renderAnalyzedScore() {
+      if (!analyzedScore) return;
+      const view = analyzedScore.trackViews[currentViewIdx] || analyzedScore.trackViews[0];
+      const bars = view.bars, sym = document.getElementById('symbolSelect').value;
+      document.getElementById('analyzerOutput').classList.remove('hidden');
+
+      const firstKey = KEY_NAMES[String(bars[0]?.keyFifths ?? 0)] || 'C';
+      document.getElementById('timeSigBadge').textContent = `1=${firstKey} · ${bars[0]?.timeSig || '4/4'}`;
+
+      const trkHtml = analyzedScore.trackViews.map((tv, idx) => `<option value="${idx}" ${idx===currentViewIdx?'selected':''}>${tv.name}</option>`).join('');
+      document.getElementById('trackSelect').innerHTML = trkHtml;
+
+      let syncBars = 0, c4 = 0, c8 = 0, c16 = 0, cDot = 0, cRest = 0;
+      const timeSigs = new Set();
+      bars.forEach(b => {
+        timeSigs.add(b.timeSig);
+        if (b.tags.some(t => t.label === '切分')) syncBars++;
+        b.voices.forEach(v => v.events.forEach(ev => {
+          if (ev.type === 'rest') { cRest++; return; }
+          if (Math.abs(ev.dur - 0.25) < 0.05) c16++;
+          else if (Math.abs(ev.dur - 1.5) < 0.05 || Math.abs(ev.dur - 0.75) < 0.05) cDot++;
+          else if (Math.abs(ev.dur - 0.5) < 0.05) c8++;
+          else c4++;
+        }));
+      });
+
+      document.getElementById('scoreMetaChips').innerHTML = `
+        <span class="mono-tag">1=${firstKey}</span>
+        <span class="mono-tag">${Array.from(timeSigs).join('→')}</span>
+        <span class="mono-tag">${bars.length} BARS</span>
+        <span class="mono-tag" style="color:var(--amber)">切分 ${Math.round((syncBars / Math.max(1, bars.length)) * 100)}%</span>
+      `;
+
+      const totalEv = Math.max(1, c4 + c8 + c16 + cDot + cRest);
+      const segs = [
+        { label: '4分/2分', count: c4, color: '#00e89d' }, { label: '8分', count: c8, color: '#38bdf8' },
+        { label: '16分', count: c16, color: '#c084fc' }, { label: '附點', count: cDot, color: '#ffb020' },
+        { label: '休止', count: cRest, color: '#475569' }
+      ].filter(s => s.count > 0);
+      document.getElementById('distBar').innerHTML = segs.map(s => `<div style="width:${(s.count/totalEv)*100}%;background:${s.color}"></div>`).join('');
+      document.getElementById('distLegend').innerHTML = segs.map(s => `<span style="display:inline-flex;align-items:center;gap:4px;"><span style="width:6px;height:6px;background:${s.color}"></span>${s.label} ${Math.round((s.count/totalEv)*100)}%</span>`).join('');
+
+      const grid = document.getElementById('measuresGrid'); grid.innerHTML = '';
+      bars.forEach((bar, idx) => {
+        const card = document.createElement('div'); card.className = 'm-card';
+        const tsBadge = (idx === 0 || bars[idx - 1].timeSig !== bar.timeSig) ? `<span class="tag">${bar.timeSig}</span>` : '';
+        const tagsHtml = tsBadge + bar.tags.map(t => `<span class="tag ${t.cls}">${t.label}</span>`).join('');
+        card.innerHTML = `<div class="card-top"><span style="font-family:var(--mono);font-size:0.7rem;color:var(--muted);">#${String(idx+1).padStart(2,'0')}</span><div class="row" style="gap:4px;">${tagsHtml}</div></div><div class="bar-jianpu">${renderPattern(bar, sym, idx).html}</div>`;
+        card.addEventListener('click', () => playBars([bar], [card], card.querySelector('.bar-jianpu')));
+        grid.appendChild(card);
+      });
+    }
+
+    function loadScoreFile(file) {
+      const name = file.name.toLowerCase();
+      if (name.endsWith('.pdf') || name.endsWith('.png') || name.endsWith('.jpg') || name.endsWith('.jpeg') || name.endsWith('.webp')) {
+        void runDolceOmr(file);
+        return;
+      }
+      lastOmrFile = null;
+      document.getElementById('omrStatusBox').classList.add('hidden');
+
+      const reader = new FileReader();
+      if (name.endsWith('.mid') || name.endsWith('.midi')) {
+        reader.onload = (e) => {
+          try {
+            analyzedScore = parseMIDI(e.target.result); currentViewIdx = 0;
+            if (analyzedScore.bpm) { const c = Math.max(45, Math.min(180, analyzedScore.bpm)); document.getElementById('bpmRange').value = c; document.getElementById('bpmVal').textContent = c; }
+            renderAnalyzedScore();
+          } catch (err) { alert('MIDI Error: ' + err.message); }
+        };
+        reader.readAsArrayBuffer(file);
+      } else {
+        reader.onload = (e) => {
+          try {
+            analyzedScore = parseMusicXML(e.target.result); currentViewIdx = 0;
+            if (analyzedScore.bpm) { const c = Math.max(45, Math.min(180, analyzedScore.bpm)); document.getElementById('bpmRange').value = c; document.getElementById('bpmVal').textContent = c; }
+            renderAnalyzedScore();
+          } catch (err) { alert('XML Error: ' + err.message); }
+        };
+        reader.readAsText(file);
+      }
+    }
+
+    const DEMO_MUSICXML = `<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="3.1">
+  <part-list><score-part id="P1"><part-name>Demo</part-name></score-part></part-list>
+  <part id="P1">
+    <measure number="1">
+      <attributes><divisions>4</divisions><key><fifths>0</fifths></key><time><beats>4</beats><beat-type>4</beat-type></time></attributes>
+      <sound tempo="92"/>
+      <note><pitch><step>C</step><octave>5</octave></pitch><duration>4</duration><voice>1</voice><staff>1</staff></note>
+      <note><pitch><step>E</step><octave>5</octave></pitch><duration>4</duration><voice>1</voice><staff>1</staff></note>
+      <note><pitch><step>G</step><octave>5</octave></pitch><duration>4</duration><voice>1</voice><staff>1</staff></note>
+      <note><pitch><step>C</step><octave>6</octave></pitch><duration>4</duration><voice>1</voice><staff>1</staff></note>
+      <backup><duration>16</duration></backup>
+      <note><pitch><step>C</step><octave>2</octave></pitch><duration>8</duration><voice>5</voice><staff>2</staff></note>
+      <note><pitch><step>G</step><octave>2</octave></pitch><duration>8</duration><voice>5</voice><staff>2</staff></note>
+    </measure>
+    <measure number="2">
+      <note><pitch><step>F</step><octave>5</octave></pitch><duration>6</duration><voice>1</voice><staff>1</staff></note>
+      <note><pitch><step>E</step><octave>5</octave></pitch><duration>2</duration><voice>1</voice><staff>1</staff></note>
+      <note><pitch><step>D</step><octave>5</octave></pitch><duration>2</duration><voice>1</voice><staff>1</staff></note>
+      <note><pitch><step>G</step><octave>5</octave></pitch><duration>4</duration><voice>1</voice><staff>1</staff></note>
+      <note><pitch><step>C</step><octave>5</octave></pitch><duration>2</duration><voice>1</voice><staff>1</staff></note>
+      <backup><duration>16</duration></backup>
+      <note><pitch><step>F</step><octave>2</octave></pitch><duration>8</duration><voice>5</voice><staff>2</staff></note>
+      <note><pitch><step>G</step><octave>2</octave></pitch><duration>8</duration><voice>5</voice><staff>2</staff></note>
+    </measure>
+  </part>
+</score-partwise>`;
+
+    // ==========================================
+    // 7. 事件綁定
+    // ==========================================
+    function switchTab(tabName) {
+      stopPlayback();
+      currentTab = tabName;
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tabName));
+      document.getElementById('analyzerSection').classList.toggle('hidden', tabName !== 'analyzer');
+      document.getElementById('quizSection').classList.toggle('hidden', tabName !== 'quiz');
+      document.getElementById('librarySection').classList.toggle('hidden', tabName !== 'library');
+      document.getElementById('catBar').classList.toggle('hidden', tabName === 'analyzer' || !!customQuizPool);
+    }
+
+    document.querySelectorAll('.tab-btn').forEach(btn => btn.addEventListener('click', () => switchTab(btn.dataset.tab)));
+
+    document.getElementById('bpmRange').addEventListener('input', (e) => {
+      document.getElementById('bpmVal').textContent = e.target.value;
+    });
+
+    document.querySelectorAll('.toggle input').forEach(el => {
+      el.addEventListener('change', () => el.parentElement.classList.toggle('on', el.checked));
+    });
+
+    document.getElementById('symbolSelect').addEventListener('change', () => {
+      renderLibrary(); renderAnalyzedScore();
+      if (!quizLocked) renderQuizOptions();
+      else if (currentQuestion) {
+        const sym = document.getElementById('symbolSelect').value;
+        document.querySelectorAll('#optionsGrid .pad').forEach((c, i) => c.querySelector('.opt-jianpu').innerHTML = renderPattern(currentQuestion.options[i], sym).html);
+      }
+    });
+
+    document.getElementById('btnPlayQuestion').addEventListener('click', () => { if (currentQuestion) playBars([currentQuestion.target]); });
+    document.getElementById('btnStopAudio').addEventListener('click', stopPlayback);
+    document.getElementById('btnLibStop').addEventListener('click', stopPlayback);
+    document.getElementById('btnStopScore').addEventListener('click', stopPlayback);
+    document.getElementById('btnNextQuestion').addEventListener('click', () => generateQuestion(true));
+    document.getElementById('btnBannerNext').addEventListener('click', () => generateQuestion(true));
+
+    const dropzone = document.getElementById('dropzone'), scoreInput = document.getElementById('scoreInput');
+    document.getElementById('omrKindSelect').addEventListener('click', (e) => e.stopPropagation());
+    document.getElementById('omrKindSelect').addEventListener('change', () => { if (lastOmrFile) void runDolceOmr(lastOmrFile); });
+    document.getElementById('btnRetryOmr').addEventListener('click', () => { if (lastOmrFile) void runDolceOmr(lastOmrFile); });
+    document.getElementById('btnPickFile').addEventListener('click', (e) => { e.stopPropagation(); scoreInput.click(); });
+    dropzone.addEventListener('click', () => scoreInput.click());
+    scoreInput.addEventListener('change', (e) => { if (e.target.files[0]) loadScoreFile(e.target.files[0]); scoreInput.value = ''; });
+    dropzone.addEventListener('dragover', (e) => { e.preventDefault(); dropzone.classList.add('dragover'); });
+    dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
+    dropzone.addEventListener('drop', (e) => { e.preventDefault(); dropzone.classList.remove('dragover'); if (e.dataTransfer.files[0]) loadScoreFile(e.dataTransfer.files[0]); });
+
+    document.getElementById('btnLoadDemo').addEventListener('click', (e) => {
+      e.stopPropagation();
+      lastOmrFile = null;
+      document.getElementById('omrStatusBox').classList.add('hidden');
+      analyzedScore = parseMusicXML(DEMO_MUSICXML); currentViewIdx = 0;
+      document.getElementById('bpmRange').value = analyzedScore.bpm;
+      document.getElementById('bpmVal').textContent = analyzedScore.bpm;
+      renderAnalyzedScore();
+    });
+
+    document.getElementById('trackSelect').addEventListener('change', (e) => {
+      currentViewIdx = Number(e.target.value);
+      renderAnalyzedScore();
+    });
+
+    document.getElementById('btnPlayAllBars').addEventListener('click', () => {
+      if (!analyzedScore) return;
+      playBars(analyzedScore.trackViews[currentViewIdx].bars, Array.from(document.querySelectorAll('#measuresGrid .m-card')));
+    });
+
+    document.getElementById('btnExportXml').addEventListener('click', () => {
+      if (!analyzedScore) return;
+      const bars = analyzedScore.trackViews[currentViewIdx].bars;
+      const xml = exportScoreToMusicXML(bars, Number(document.getElementById('bpmRange').value));
+      const blob = new Blob([xml], { type: 'application/vnd.recordare.musicxml+xml' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'recognized_score.musicxml';
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    });
+
+    document.getElementById('btnQuizFromScore').addEventListener('click', () => {
+      if (!analyzedScore) return;
+      const bars = analyzedScore.trackViews[currentViewIdx].bars, unique = [], seen = new Set();
+      bars.forEach(b => { const sig = renderPattern(b, 'pitch').html; if (!seen.has(sig)) { seen.add(sig); unique.push(b); } });
+      if (unique.length < 2) { alert('小節種類不足 2 種'); return; }
+      customQuizPool = unique;
+      document.getElementById('customQuizBadge').classList.remove('hidden');
+      document.getElementById('btnExitCustomQuiz').classList.remove('hidden');
+      switchTab('quiz'); generateQuestion(true);
+    });
+
+    document.getElementById('btnExitCustomQuiz').addEventListener('click', () => {
+      customQuizPool = null;
+      document.getElementById('customQuizBadge').classList.add('hidden');
+      document.getElementById('btnExitCustomQuiz').classList.add('hidden');
+      document.getElementById('catBar').classList.remove('hidden');
+      generateQuestion(false);
+    });
+
+    initCategories();
+    renderLibrary();
+    generateQuestion(false);
+  </script>
+</body>
+</html>
