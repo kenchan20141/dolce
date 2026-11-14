@@ -1,2592 +1,2166 @@
-import "./styles.css";
-import { MetaData } from "./smufl/smufl";
-import { setMeasureBackend } from "./common/measure";
-import { browserMeasure, ensureFontsReady } from "./common/measure.browser";
-import { asset } from "./common/asset";
-import { App, type ViewMode } from "./editor/app";
-import type { DocFormatId } from "./editor/formats";
-import type { ElementId } from "./model/doc";
-import { anchorSeconds, spanSeconds, timelineSeconds, type PlayPoint } from "./editor/player";
-import { SAMPLE } from "./editor/sample";
-import { initLang } from "./i18n";
-import { attachPinchZoom } from "./editor/pinchzoom";
-import { isPdf } from "./omrkit/pdf";
-import { recognizeMusicppDetailed, omrEmitter } from "./omr";
-import { scoreDocToMusicXml } from "./model/toxml";
 
-export type OmrKind = "auto" | "jianpu" | "staff";
 
-export interface ScoreSnapshot {
-  title: string;
-  format: DocFormatId;
-  text: string;
-  viewMode: ViewMode;
-}
-
-const S2T_MAP: Record<string, string> = {
-  "编": "編", "辑": "輯", "节": "節", "拍": "拍", "数": "數", "处": "處",
-  "问": "問", "题": "題", "音": "音", "符": "符", "时": "時", "值": "值",
-  "附": "附", "点": "點", "声": "聲", "部": "部", "长": "長", "短": "短",
-  "复": "複", "错": "錯", "误": "誤", "调": "調", "号": "號", "线": "線",
-  "连": "連", "延": "延", "换": "換", "页": "頁", "删": "刪", "除": "除",
-  "选": "選", "中": "中", "个": "個", "无": "無", "请": "請", "先": "先",
-  "击": "擊", "仅": "僅", "支": "支", "持": "持", "图": "圖", "谱": "譜",
-  "乐": "樂", "曲": "曲", "词": "詞", "强": "強", "弱": "弱", "渐": "漸",
-  "标": "標", "记": "記", "只": "只", "能": "能", "在": "在", "这": "這",
-  "里": "裡", "对": "對", "齐": "齊", "满": "滿", "于": "於", "为": "為",
-  "与": "與", "没": "沒", "经": "經", "结": "結", "开": "開", "设": "設",
-  "改": "改", "变": "變", "动": "動", "撤": "撤", "销": "銷", "实": "實",
-  "际": "際", "应": "應", "该": "該", "还": "還", "组": "組", "圆": "圓",
-  "滑": "滑", "休": "休", "止": "止", "空": "空", "当": "當", "前": "前",
-  "后": "後", "两": "兩", "边": "邊", "间": "間", "格": "格", "贴": "貼",
-  "复": "複", "制": "製", "移": "移", "高": "高", "低": "低", "升": "升",
-  "降": "降", "半": "半", "全": "全", "单": "單", "双": "雙", "多": "多",
-  "少": "少", "过": "過", "补": "補", "漏": "漏", "识": "識", "别": "別",
-  "核": "核", "写": "寫", "读": "讀", "入": "入", "导": "導", "出": "出",
-  "保": "保", "存": "存", "确": "確", "认": "認", "取": "取", "消": "消",
-  "简": "簡", "繁": "繁", "体": "體", "五": "五", "混": "混", "排": "排",
-  "版": "版", "面": "面", "显": "顯", "示": "示", "隐": "隱", "藏": "藏",
-  "条": "條", "行": "行", "段": "段", "整": "整", "首": "首", "尾": "尾",
-};
-
-function toTraditionalUi(s: string): string {
-  if (!s) return s;
-  let out = "";
-  for (let i = 0; i < s.length; i++) {
-    const ch = s[i]!;
-    out += S2T_MAP[ch] ?? ch;
-  }
-  return out;
-}
-
-async function registerBravura() {
-  if (typeof FontFace === "undefined") return;
-  const faces = [
-    new FontFace("Bravura", `url(${asset("redist/Bravura.woff2")}) format("woff2")`),
-    new FontFace("Bravura Text", `url(${asset("redist/BravuraText.otf")}) format("opentype")`),
-  ];
-  await Promise.all(faces.map((f) => f.load()));
-  for (const f of faces) (document.fonts as FontFaceSet).add(f);
-}
-
-/** 快速抽樣判斷是否已是乾淨白底數位樂譜，若是則免跑逐像素光影運算 */
-function isAlreadyCleanWhiteBg(data: Uint8ClampedArray, w: number, h: number): boolean {
-  const stepX = Math.max(1, Math.floor(w / 36));
-  const stepY = Math.max(1, Math.floor(h / 36));
-  let total = 0;
-  let brightWhite = 0;
-  let dimGrayBg = 0;
-
-  for (let y = 0; y < h; y += stepY) {
-    const rowOff = y * w;
-    for (let x = 0; x < w; x += stepX) {
-      const p = (rowOff + x) * 4;
-      const a = data[p + 3]!;
-      const alpha = a < 250 ? a / 255 : 1;
-      const r = data[p]! * alpha + 255 * (1 - alpha);
-      const g = data[p + 1]! * alpha + 255 * (1 - alpha);
-      const b = data[p + 2]! * alpha + 255 * (1 - alpha);
-      const lum = (77 * r + 150 * g + 29 * b + 128) >> 8;
-      total++;
-      if (lum >= 244) brightWhite++;
-      else if (lum >= 120 && lum < 238) dimGrayBg++;
-    }
-  }
-  return total > 0 && brightWhite / total >= 0.82 && dimGrayBg / total <= 0.08;
-}
-
-/**
- * 將手拍照片或過大圖檔做「尺寸上限控管」＋「陰影光影去除」＋「白底黑字對比強化」：
- * 1. 限制最大長邊與總像素上限，避免超高畫素照片拖慢辨識，同時保留譜線、符頭與細小跳轉記號精度。
- * 2. 若偵測到陰影／偏暗紙張，透過局部網格估測紙張底色並雙線性內插，將底色還原為純白、符號強化為深黑，
- *    並放寬黑白裁切區間以免吃掉 D.S. / Coda / 1. / 2. 等小字。
- * 3. 優先輸出無損 PNG 保留字跡與記號銳利度。
- */
-function enhanceScoreContrast(ctx: CanvasRenderingContext2D, w: number, h: number): boolean {
-  const imgData = ctx.getImageData(0, 0, w, h);
-  const data = imgData.data;
-
-  if (isAlreadyCleanWhiteBg(data, w, h)) {
-    return false;
-  }
-
-  const n = w * h;
-  const lum = new Uint8Array(n);
-
-  for (let i = 0, p = 0; i < n; i++, p += 4) {
-    const a = data[p + 3]!;
-    if (a < 250) {
-      const alpha = a / 255;
-      const r = data[p]! * alpha + 255 * (1 - alpha);
-      const g = data[p + 1]! * alpha + 255 * (1 - alpha);
-      const b = data[p + 2]! * alpha + 255 * (1 - alpha);
-      lum[i] = Math.min(255, (77 * r + 150 * g + 29 * b + 128) >> 8);
-    } else {
-      lum[i] = (77 * data[p]! + 150 * data[p + 1]! + 29 * data[p + 2]! + 128) >> 8;
-    }
-  }
-
-  const block = Math.max(20, Math.min(48, Math.round(Math.min(w, h) / 40)));
-  const gw = Math.max(1, Math.ceil(w / block));
-  const gh = Math.max(1, Math.ceil(h / block));
-  const grid = new Float32Array(gw * gh);
-  const hist = new Uint32Array(64);
-  const stride = Math.max(1, Math.floor(block / 14));
-
-  for (let gy = 0; gy < gh; gy++) {
-    const y0 = gy * block;
-    const y1 = Math.min(h, y0 + block);
-    for (let gx = 0; gx < gw; gx++) {
-      const x0 = gx * block;
-      const x1 = Math.min(w, x0 + block);
-      hist.fill(0);
-      let cnt = 0;
-      for (let y = y0; y < y1; y += stride) {
-        const rowOff = y * w;
-        for (let x = x0; x < x1; x += stride) {
-          hist[lum[rowOff + x]! >> 2]!++;
-          cnt++;
-        }
-      }
-      const target = Math.max(1, Math.floor(cnt * 0.85));
-      let acc = 0;
-      let bgVal = 255;
-      for (let b = 0; b < 64; b++) {
-        acc += hist[b]!;
-        if (acc >= target) {
-          bgVal = Math.min(255, b * 4 + 2);
-          break;
-        }
-      }
-      grid[gy * gw + gx] = bgVal;
-    }
-  }
-
-  const smoothGrid = new Float32Array(gw * gh);
-  for (let gy = 0; gy < gh; gy++) {
-    for (let gx = 0; gx < gw; gx++) {
-      let sum = 0;
-      let wsum = 0;
-      for (let dy = -1; dy <= 1; dy++) {
-        const ny = Math.max(0, Math.min(gh - 1, gy + dy));
-        const wy = dy === 0 ? 2 : 1;
-        for (let dx = -1; dx <= 1; dx++) {
-          const nx = Math.max(0, Math.min(gw - 1, gx + dx));
-          const wt = wy * (dx === 0 ? 2 : 1);
-          sum += grid[ny * gw + nx]! * wt;
-          wsum += wt;
-        }
-      }
-      smoothGrid[gy * gw + gx] = Math.max(36, sum / wsum);
-    }
-  }
-
-  const BLACK_CLIP = 95;
-  const WHITE_CLIP = 230;
-  const SPAN = WHITE_CLIP - BLACK_CLIP;
-  const lut = new Uint8Array(256);
-  for (let v = 0; v < 256; v++) {
-    if (v <= BLACK_CLIP) lut[v] = 0;
-    else if (v >= WHITE_CLIP) lut[v] = 255;
-    else {
-      const t = (v - BLACK_CLIP) / SPAN;
-      lut[v] = Math.round(Math.pow(t, 1.15) * 255);
-    }
-  }
-
-  const halfBlock = block * 0.5;
-  for (let y = 0; y < h; y++) {
-    const fy = Math.max(0, Math.min(gh - 1, (y - halfBlock) / block));
-    const gy0 = Math.floor(fy);
-    const gy1 = Math.min(gh - 1, gy0 + 1);
-    const ty = fy - gy0;
-    const ity = 1 - ty;
-    const rowOff = y * w;
-
-    for (let x = 0; x < w; x++) {
-      const fx = Math.max(0, Math.min(gw - 1, (x - halfBlock) / block));
-      const gx0 = Math.floor(fx);
-      const gx1 = Math.min(gw - 1, gx0 + 1);
-      const tx = fx - gx0;
-
-      const b00 = smoothGrid[gy0 * gw + gx0]!;
-      const b10 = smoothGrid[gy0 * gw + gx1]!;
-      const b01 = smoothGrid[gy1 * gw + gx0]!;
-      const b11 = smoothGrid[gy1 * gw + gx1]!;
-      const bg = (b00 * (1 - tx) + b10 * tx) * ity + (b01 * (1 - tx) + b11 * tx) * ty;
-
-      const idx = rowOff + x;
-      const norm = Math.min(255, Math.max(0, Math.round((lum[idx]! * 255) / bg)));
-      const out = lut[norm]!;
-      const p = idx * 4;
-      data[p] = out;
-      data[p + 1] = out;
-      data[p + 2] = out;
-      data[p + 3] = 255;
-    }
-  }
-
-  ctx.putImageData(imgData, 0, 0);
-  return true;
-}
-
-async function maybeOptimizeImage(file: File): Promise<{ bytes: Uint8Array; mime?: string }> {
-  const raw = new Uint8Array(await file.arrayBuffer());
-  const mime = file.type || undefined;
-  if (typeof createImageBitmap === "undefined") return { bytes: raw, mime };
-
-  try {
-    const bmp = await createImageBitmap(new Blob([raw], mime ? { type: mime } : {}));
-    try {
-      const maxSide = Math.max(bmp.width, bmp.height);
-      const minSide = Math.max(1, Math.min(bmp.width, bmp.height));
-      const pixels = bmp.width * bmp.height;
-      const aspect = maxSide / minSide;
-
-      const limitSide = aspect > 2.5 ? 3600 : 2200;
-      const limitPixels = aspect > 2.5 ? 3_600_000 : 3_100_000;
-      const scale = Math.min(1, limitSide / maxSide, Math.sqrt(limitPixels / pixels));
-
-      const w = Math.max(1, Math.round(bmp.width * scale));
-      const h = Math.max(1, Math.round(bmp.height * scale));
-
-      const cv = document.createElement("canvas");
-      cv.width = w;
-      cv.height = h;
-      const ctx = cv.getContext("2d", { willReadFrequently: true });
-      if (!ctx) return { bytes: raw, mime };
-
-      ctx.fillStyle = "#ffffff";
-      ctx.fillRect(0, 0, w, h);
-      ctx.imageSmoothingEnabled = true;
-      ctx.imageSmoothingQuality = "high";
-      ctx.drawImage(bmp, 0, 0, w, h);
-
-      const modified = enhanceScoreContrast(ctx, w, h);
-      if (!modified && scale >= 0.999) {
-        return { bytes: raw, mime };
-      }
-
-      const pngBlob = await new Promise<Blob | null>((r) => cv.toBlob(r, "image/png"));
-      if (pngBlob) {
-        return { bytes: new Uint8Array(await pngBlob.arrayBuffer()), mime: "image/png" };
-      }
-      const jpgBlob = await new Promise<Blob | null>((r) => cv.toBlob(r, "image/jpeg", 0.95));
-      if (jpgBlob) {
-        return { bytes: new Uint8Array(await jpgBlob.arrayBuffer()), mime: "image/jpeg" };
-      }
-      return { bytes: raw, mime };
-    } finally {
-      bmp.close();
-    }
-  } catch {
-    return { bytes: raw, mime };
-  }
-}
-
-export interface MountShellOptions {
-  scorePane: HTMLElement;
-  hiddenCodePane: HTMLElement;
-  statusEl?: HTMLElement | null;
-  playBtn?: HTMLButtonElement | null;
-  stopBtn?: HTMLButtonElement | null;
-  progressEl?: HTMLInputElement | null;
-  timeEl?: HTMLElement | null;
-  speedSel?: HTMLSelectElement | null;
-  loopBtn?: HTMLButtonElement | null;
-  metroBtn?: HTMLButtonElement | null;
-  viewSwitch?: HTMLElement | null;
-  viewBtns?: ReadonlyMap<ViewMode, HTMLButtonElement>;
-  editToggleBtn?: HTMLButtonElement | null;
-  editSaveBtn?: HTMLButtonElement | null;
-  editDiscardBtn?: HTMLButtonElement | null;
-  editPanel?: HTMLElement | null;
-  visualEls?: {
-    mode: HTMLElement | null;
-    selInfo?: HTMLElement | null;
-    marksBtn: HTMLButtonElement | null;
-    beatBtn: HTMLButtonElement | null;
-    beatCount: HTMLElement | null;
-  };
-  onZoomChange?: (zoom: number) => void;
-  onRangeChange?: (state: { active: boolean; picking: boolean; hasStart: boolean }) => void;
-  onEditModeChange?: (editing: boolean, committed?: boolean) => void;
-}
-
-let _appPromise: Promise<App> | null = null;
-let _app: App | null = null;
-let _scorePane: HTMLElement | null = null;
-let _progressEl: HTMLInputElement | null = null;
-let _editToggleBtn: HTMLButtonElement | null = null;
-let _editPanel: HTMLElement | null = null;
-let _onZoomChange: ((z: number) => void) | undefined;
-let _onRangeChange: MountShellOptions["onRangeChange"];
-let _onEditModeChange: MountShellOptions["onEditModeChange"];
-let _loadGen = 0;
-let _editMode = false;
-let _editBackup: { format: DocFormatId; text: string; viewMode: ViewMode } | null = null;
-
-// ---- 譜面直接選段 A-B 反覆循環 ----
-let _abLoop: { first: PlayPoint; last: PlayPoint; tFrom: number; tTo: number } | null = null;
-let _abPendingStart: ElementId | null = null;
-let _abPreviewRange: { startId: ElementId; endId: ElementId; tFrom: number; tTo: number } | null = null;
-let _rangePickMode = false;
-
-function notifyRange() {
-  _onRangeChange?.({
-    active: _abLoop !== null,
-    picking: _rangePickMode,
-    hasStart: _abPendingStart !== null || _abPreviewRange !== null,
-  });
-}
-
-function captureSnapshot(): { format: DocFormatId; text: string; viewMode: ViewMode } | null {
-  if (!_app || _app.pageEls.length === 0) return null;
-  return {
-    format: _app.docFormat,
-    text: _app.getText(),
-    viewMode: _app.viewMode,
-  };
-}
-
-async function restoreSnapshotInternal(snap: { format: DocFormatId; text: string; viewMode: ViewMode }) {
-  if (!_app) return;
-  cleanupSustainCursor(_scorePane);
-  _app.stopPlayback();
-  _app.clearPages();
-  if (snap.format === "musicxml") {
-    _app.adoptStaffXml(snap.text);
-  } else {
-    _app.adoptText(snap.format, snap.text, null);
-  }
-  const targetMode = snap.viewMode === "original" ? "expanded" : snap.viewMode;
-  await _app.setViewMode(targetMode);
-  await _app.whenIdle();
-}
-
-function enterEditMode() {
-  if (_editMode) return;
-  _editBackup = captureSnapshot();
-  _editMode = true;
-  if (_editToggleBtn) {
-    _editToggleBtn.classList.add("active");
-    _editToggleBtn.setAttribute("aria-pressed", "true");
-  }
-  if (_editPanel) {
-    _editPanel.classList.remove("hidden");
-  }
-  if (_rangePickMode) {
-    _rangePickMode = false;
-    _abPendingStart = null;
-    _abPreviewRange = null;
-    paintAbBands();
-    notifyRange();
-  }
-  if (_app) {
-    _app.visual.beatCheck = true;
-    _app.visual.afterRebuild();
-    _scorePane?.focus({ preventScroll: true });
-  }
-  _onEditModeChange?.(true, false);
-}
-
-function commitEditMode() {
-  if (!_editMode) return;
-  _editBackup = null;
-  _editMode = false;
-  if (_editToggleBtn) {
-    _editToggleBtn.classList.remove("active");
-    _editToggleBtn.setAttribute("aria-pressed", "false");
-  }
-  if (_editPanel) {
-    _editPanel.classList.add("hidden");
-  }
-  if (_app) {
-    _app.visual.afterRebuild();
-    if (_scorePane) hideDiagnosticOverlays(_scorePane);
-  }
-  _onEditModeChange?.(false, true);
-}
-
-async function cancelEditMode() {
-  if (!_editMode) return;
-  const backup = _editBackup;
-  _editBackup = null;
-  _editMode = false;
-  if (_editToggleBtn) {
-    _editToggleBtn.classList.remove("active");
-    _editToggleBtn.setAttribute("aria-pressed", "false");
-  }
-  if (_editPanel) {
-    _editPanel.classList.add("hidden");
-  }
-  if (_app && backup && (_app.getText() !== backup.text || _app.docFormat !== backup.format || _app.viewMode !== backup.viewMode)) {
-    await restoreSnapshotInternal(backup);
-  }
-  if (_app) {
-    _app.visual.afterRebuild();
-    if (_scorePane) hideDiagnosticOverlays(_scorePane);
-  }
-  _onEditModeChange?.(false, false);
-}
-
-function observeTraditionalText(el: HTMLElement | null | undefined) {
-  if (!el) return;
-  let busy = false;
-  const convert = () => {
-    if (busy) return;
-    const raw = el.textContent ?? "";
-    const trad = toTraditionalUi(raw);
-    if (trad !== raw) {
-      busy = true;
-      el.textContent = trad;
-      busy = false;
-    }
-  };
-  convert();
-  const obs = new MutationObserver(convert);
-  obs.observe(el, { childList: true, characterData: true, subtree: true });
-}
-
-function resolveNoteIdAt(el: Element | null): ElementId | null {
-  if (!_app || !el) return null;
-  if (_app.mode === "mixed") return _app.painter.noteAt(el);
-  const entry = _app.syncView.entryAt(el);
-  return entry && (entry.kind === "note" || entry.kind === "lyric" || entry.kind === "sustain") ? entry.id : null;
-}
-
-function getTimeline() {
-  if (!_app) return null;
-  const src = _app.playable();
-  if (!src) return null;
-  return timelineSeconds(src, _app.playback.options());
-}
-
-/** 觸控／滑鼠容錯：搜尋點擊／拖曳座標半徑內最近的音符 */
-function findNearestNoteId(
-  scorePane: HTMLElement,
-  target: Element | null,
-  clientX: number,
-  clientY: number,
-  maxRadiusPx = 34,
-): ElementId | null {
-  const direct = resolveNoteIdAt(target);
-  const info = getTimeline();
-  if (direct !== null) {
-    if (!info || anchorSeconds(info.tl, info.spq, { id: direct, pass: 1 }) !== null) {
-      return direct;
-    }
-  }
-
-  let bestId: ElementId | null = null;
-  let bestDist = maxRadiusPx;
-
-  for (const svg of scorePane.querySelectorAll<SVGSVGElement>(".score-page-wrap svg")) {
-    const sr = svg.getBoundingClientRect();
-    if (
-      clientX < sr.left - maxRadiusPx ||
-      clientX > sr.right + maxRadiusPx ||
-      clientY < sr.top - maxRadiusPx ||
-      clientY > sr.bottom + maxRadiusPx
-    ) {
-      continue;
-    }
-
-    for (const g of svg.querySelectorAll<SVGGElement>("g")) {
-      const id = resolveNoteIdAt(g);
-      if (id === null) continue;
-      if (info && anchorSeconds(info.tl, info.spq, { id, pass: 1 }) === null) continue;
-      const b = g.getBoundingClientRect();
-      if (b.width <= 0 && b.height <= 0) continue;
-      const dx = Math.max(b.left - clientX, 0, clientX - b.right);
-      const dy = Math.max(b.top - clientY, 0, clientY - b.bottom);
-      const dist = Math.hypot(dx, dy);
-      if (dist <= bestDist) {
-        bestDist = dist;
-        bestId = id;
-      }
-    }
-  }
-
-  return bestId;
-}
-
-// ---- 隱藏粉紅／紅色拍數診斷色塊與 +♩ 徽章（修譜模式關閉時才隱藏，修譜時保留供對拍用） ----
-function parseRgbColor(colorStr: string | null | undefined): [number, number, number, number] | null {
-  if (!colorStr || colorStr === "none" || colorStr === "transparent") return null;
-  const m = colorStr.match(/rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)(?:\s*,\s*([\d.]+))?\s*\)/i);
-  if (!m) return null;
-  return [Number(m[1]), Number(m[2]), Number(m[3]), m[4] !== undefined ? Number(m[4]) : 1];
-}
-
-function isPinkDiagnosticColor(colorStr: string | null | undefined): boolean {
-  const c = parseRgbColor(colorStr);
-  if (!c || c[3] <= 0.01) return false;
-  const [r, g, b] = c;
-  return r >= 165 && r - g >= 45 && g <= b + 28;
-}
-
-function isOrangeCursorColor(colorStr: string | null | undefined): boolean {
-  const c = parseRgbColor(colorStr);
-  if (!c || c[3] <= 0.01) return false;
-  const [r, g, b] = c;
-  return r >= 165 && g >= 60 && g <= 195 && b <= 140 && g - b >= 22 && r - g >= 15;
-}
-
-function isProtectedCursorEl(el: Element): boolean {
-  if (el.classList.contains("sl-sustain-cursor")) return true;
-  if (el.closest("[class*='cursor' i], [class*='playhead' i], [class*='caret' i]")) {
-    return true;
-  }
-  const st = getComputedStyle(el);
-  return (
-    isOrangeCursorColor(st.stroke) ||
-    isOrangeCursorColor(st.fill) ||
-    isOrangeCursorColor(st.borderColor) ||
-    isOrangeCursorColor(st.backgroundColor)
-  );
-}
-
-function hideDiagnosticOverlays(scorePane: HTMLElement): void {
-  if (_editMode) return;
-  const pages = scorePane.querySelectorAll<HTMLElement>(".score-page-wrap");
-  for (const page of pages) {
-    for (const svg of page.querySelectorAll<SVGSVGElement>("svg")) {
-      for (const rect of svg.querySelectorAll<SVGRectElement>("rect")) {
-        if (
-          rect.classList.contains("sl-ab-band") ||
-          rect.classList.contains("sl-ab-marker") ||
-          rect.classList.contains("sl-sustain-cursor")
-        ) {
-          continue;
-        }
-        const attrDash = rect.getAttribute("stroke-dasharray");
-        const attrStroke = rect.getAttribute("stroke");
-        const attrFill = rect.getAttribute("fill");
-        if (!attrDash && !rect.getAttribute("class")) continue;
-        if (isProtectedCursorEl(rect)) continue;
-        const st = getComputedStyle(rect);
-        const dash = attrDash || st.strokeDasharray;
-        if (!dash || dash === "none") continue;
-        if (
-          isPinkDiagnosticColor(attrStroke) ||
-          isPinkDiagnosticColor(st.stroke) ||
-          isPinkDiagnosticColor(attrFill) ||
-          isPinkDiagnosticColor(st.fill)
-        ) {
-          rect.style.display = "none";
-        }
-      }
-
-      for (const txt of svg.querySelectorAll<SVGTextElement>("text")) {
-        const content = (txt.textContent || "").trim();
-        if (!content) continue;
-        if (!(/^[+\-−]/.test(content) || /[♩♪♫♬𝅝𝅗𝅥𝅘𝅥𝅘𝅥𝅮𝅘𝅥𝅯]/.test(content) || content.length <= 6)) continue;
-        if (isProtectedCursorEl(txt)) continue;
-        const st = getComputedStyle(txt);
-        const pink = isPinkDiagnosticColor(st.fill) || isPinkDiagnosticColor(txt.getAttribute("fill"));
-        if (!pink) continue;
-        txt.style.display = "none";
-        const parentG = txt.parentElement;
-        if (parentG && parentG.tagName.toLowerCase() === "g" && parentG.children.length <= 4) {
-          for (const child of parentG.children) {
-            if (isProtectedCursorEl(child)) continue;
-            const cst = getComputedStyle(child);
-            if (isPinkDiagnosticColor(cst.fill) || isPinkDiagnosticColor(cst.stroke)) {
-              (child as SVGElement).style.display = "none";
-            }
-          }
-        }
-      }
-
-      for (const g of svg.querySelectorAll<SVGGElement>("g[class]")) {
-        const cls = (g.getAttribute("class") || "").toLowerCase();
-        if (!/(err|warn|mismatch|overfill|underfill|beat-diff|diag)/.test(cls)) continue;
-        if (isProtectedCursorEl(g)) continue;
-        if (resolveNoteIdAt(g) === null) g.style.display = "none";
-      }
-    }
-
-    for (const el of page.querySelectorAll<HTMLElement>("div, span")) {
-      if (
-        el.classList.contains("sl-ab-band") ||
-        el.classList.contains("sl-ab-marker") ||
-        el.classList.contains("sl-sustain-cursor")
-      ) {
-        continue;
-      }
-      const badgeText = (el.textContent || "").trim();
-      const cls = (el.className || "").toString().toLowerCase();
-      if (!badgeText && !/(err|warn|mismatch|diag)/.test(cls)) continue;
-      if (isProtectedCursorEl(el)) continue;
-      const st = getComputedStyle(el);
-      const dashedPink = st.borderStyle.includes("dashed") && isPinkDiagnosticColor(st.borderColor);
-      const pinkBadge =
-        isPinkDiagnosticColor(st.color) && (/^[+\-−]/.test(badgeText) || /[♩♪♫𝅗𝅥𝅘𝅥𝅘𝅥𝅮]/.test(badgeText));
-      if (dashedPink || pinkBadge) {
-        el.style.display = "none";
-      }
-    }
-  }
-}
-
-// ---- 座標轉換工具 ----
-function unionBoxInSvgRoot(
-  el: SVGGraphicsElement,
-  invSvgCtm: DOMMatrix,
-  acc: { minX: number; minY: number; maxX: number; maxY: number } | null,
-): { minX: number; minY: number; maxX: number; maxY: number } | null {
-  const elCtm = el.getScreenCTM();
-  if (!elCtm) return acc;
-  let box: DOMRect;
-  try {
-    box = el.getBBox();
-  } catch {
-    return acc;
-  }
-  if (box.width <= 0 && box.height <= 0) return acc;
-
-  const mat = invSvgCtm.multiply(elCtm);
-  const x0 = box.x;
-  const y0 = box.y;
-  const x1 = box.x + box.width;
-  const y1 = box.y + box.height;
-
-  const pts: [number, number][] = [
-    [mat.a * x0 + mat.c * y0 + mat.e, mat.b * x0 + mat.d * y0 + mat.f],
-    [mat.a * x1 + mat.c * y0 + mat.e, mat.b * x1 + mat.d * y0 + mat.f],
-    [mat.a * x0 + mat.c * y1 + mat.e, mat.b * x0 + mat.d * y1 + mat.f],
-    [mat.a * x1 + mat.c * y1 + mat.e, mat.b * x1 + mat.d * y1 + mat.f],
-  ];
-
-  let out = acc;
-  for (const [px, py] of pts) {
-    if (!Number.isFinite(px) || !Number.isFinite(py)) continue;
-    if (!out) {
-      out = { minX: px, minY: py, maxX: px, maxY: py };
-    } else {
-      if (px < out.minX) out.minX = px;
-      if (py < out.minY) out.minY = py;
-      if (px > out.maxX) out.maxX = px;
-      if (py > out.maxY) out.maxY = py;
-    }
-  }
-  return out;
-}
-
-function clientRectToSvgRoot(
-  rect: DOMRect,
-  invSvgCtm: DOMMatrix,
-): { minX: number; minY: number; maxX: number; maxY: number } {
-  const pts: [number, number][] = [
-    [invSvgCtm.a * rect.left + invSvgCtm.c * rect.top + invSvgCtm.e, invSvgCtm.b * rect.left + invSvgCtm.d * rect.top + invSvgCtm.f],
-    [invSvgCtm.a * rect.right + invSvgCtm.c * rect.top + invSvgCtm.e, invSvgCtm.b * rect.right + invSvgCtm.d * rect.top + invSvgCtm.f],
-    [invSvgCtm.a * rect.left + invSvgCtm.c * rect.bottom + invSvgCtm.e, invSvgCtm.b * rect.left + invSvgCtm.d * rect.bottom + invSvgCtm.f],
-    [invSvgCtm.a * rect.right + invSvgCtm.c * rect.bottom + invSvgCtm.e, invSvgCtm.b * rect.right + invSvgCtm.d * rect.bottom + invSvgCtm.f],
-  ];
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const [px, py] of pts) {
-    if (px < minX) minX = px;
-    if (py < minY) minY = py;
-    if (px > maxX) maxX = px;
-    if (py > maxY) maxY = py;
-  }
-  return { minX, minY, maxX, maxY };
-}
-
-// ---- 播放游標偵測 ＋ 簡譜延音橫線（—）與連續休止符（0）動態游標推進 ＋ 換行防截斷守護 ----
-interface Box2D {
-  minX: number;
-  minY: number;
-  maxX: number;
-  maxY: number;
-}
-
-interface CursorTarget {
-  svg: SVGSVGElement;
-  box: Box2D;
-  relStart?: number;
-  relEnd?: number;
-}
-
-let _playbackGuardRaf = 0;
-let _hiddenCursorEl: HTMLElement | SVGElement | null = null;
-let _sustainState: {
-  key: string;
-  enterMs: number;
-  noteDur: number;
-  totalWindowSec: number;
-  lastCursorLeft: number;
-  lastCursorTop: number;
-  lastProgressVal: number;
-  matchedSvg: SVGSVGElement;
-  origBox: Box2D;
-  origStyle: {
-    rx: string;
-    ry: string;
-    fill: string;
-    stroke: string;
-    strokeWidth: string;
-  };
-  sustainTargets: CursorTarget[];
-  restTargets: CursorTarget[];
-} | null = null;
-
-function isSustainDashText(s: string): boolean {
-  const t = s.trim();
-  return t === "-" || t === "–" || t === "—" || t === "−" || t === "\u2015" || t === "\u2500";
-}
-
-function isRestZeroText(s: string): boolean {
-  const t = s.trim();
-  return t === "0" || t === "0·" || t === "0.";
-}
-
-function findOfficialPlaybackCursor(scorePane: HTMLElement): { el: HTMLElement | SVGElement; rect: DOMRect } | null {
-  for (const page of scorePane.querySelectorAll<HTMLElement>(".score-page-wrap")) {
-    for (const el of page.querySelectorAll<HTMLElement | SVGElement>("[class*='cursor' i], [class*='playhead' i]")) {
-      if (
-        el.classList.contains("sl-ab-band") ||
-        el.classList.contains("sl-ab-marker") ||
-        el.classList.contains("sl-sustain-cursor")
-      ) {
-        continue;
-      }
-      const st = getComputedStyle(el);
-      if (st.display === "none" || st.visibility === "hidden") continue;
-      if (st.opacity === "0" && el !== _hiddenCursorEl) continue;
-      const r = el.getBoundingClientRect();
-      if (r.width > 0 && r.height >= 12) return { el, rect: r };
-    }
-    for (const rect of page.querySelectorAll<SVGRectElement>("svg rect")) {
-      if (
-        rect.classList.contains("sl-ab-band") ||
-        rect.classList.contains("sl-ab-marker") ||
-        rect.classList.contains("sl-sustain-cursor")
-      ) {
-        continue;
-      }
-      const st = getComputedStyle(rect);
-      if (st.display === "none" || st.visibility === "hidden") continue;
-      if (st.opacity === "0" && rect !== _hiddenCursorEl) continue;
-      if (!isOrangeCursorColor(st.stroke) && !isOrangeCursorColor(st.fill)) continue;
-      const r = rect.getBoundingClientRect();
-      if (r.width > 1 && r.width <= 60 && r.height >= 16) return { el: rect, rect: r };
-    }
-    for (const div of page.querySelectorAll<HTMLElement>("div")) {
-      const st = getComputedStyle(div);
-      if (st.display === "none" || st.visibility === "hidden") continue;
-      if (st.opacity === "0" && div !== _hiddenCursorEl) continue;
-      if (!isOrangeCursorColor(st.borderColor) && !isOrangeCursorColor(st.backgroundColor)) continue;
-      const r = div.getBoundingClientRect();
-      if (r.width > 1 && r.width <= 60 && r.height >= 16) return { el: div, rect: r };
-    }
-  }
-  return null;
-}
-
-function cleanupSustainCursor(scorePane?: HTMLElement | null) {
-  if (_hiddenCursorEl) {
-    _hiddenCursorEl.style.opacity = "";
-    _hiddenCursorEl = null;
-  }
-  scorePane?.querySelectorAll(".sl-sustain-cursor").forEach((el) => el.remove());
-  _sustainState = null;
-}
-
-/** 取得簡譜音符數字本體框、垂直中心與高度（避免共用減時線／弧線／八度點拉寬或拉偏基準） */
-function getNoteCoreMetrics(
-  el: SVGGraphicsElement,
-  invSvgCtm: DOMMatrix,
-  fallbackBox: Box2D,
-): { box: Box2D; midY: number; height: number } {
-  const texts = el.querySelectorAll<SVGTextElement>("text");
-  let bestBox: Box2D | null = null;
-  let bestH = 0;
-
-  for (const t of texts) {
-    const str = (t.textContent || "").trim();
-    if (!/^[1-7xX0]/.test(str)) continue;
-    const b = unionBoxInSvgRoot(t, invSvgCtm, null);
-    if (!b) continue;
-    const h = b.maxY - b.minY;
-    if (h > bestH) {
-      bestH = h;
-      bestBox = b;
-    }
-  }
-
-  if (bestBox && bestH >= 6) {
-    return {
-      box: bestBox,
-      midY: (bestBox.minY + bestBox.maxY) * 0.5,
-      height: bestH,
-    };
-  }
-  return {
-    box: fallbackBox,
-    midY: (fallbackBox.minY + fallbackBox.maxY) * 0.5,
-    height: Math.max(12, fallbackBox.maxY - fallbackBox.minY),
-  };
-}
-
-function findSustainBoxesForNote(
-  svg: SVGSVGElement,
-  invSvgCtm: DOMMatrix,
-  noteId: ElementId,
-  coreBox: Box2D,
-  coreMidY: number,
-  coreH: number,
-): Box2D[] {
-  if (!_app) return [];
-
-  const rowTol = Math.max(22, coreH * 1.15);
-  const dashVerticalTol = Math.max(11, coreH * 0.6);
-
-  const sameIdSustains: Box2D[] = [];
-  const nearbySustains: Box2D[] = [];
-  const sustainEls = new Set<Element>();
-  let nextBoundaryMinX = Infinity;
-
-  for (const g of svg.querySelectorAll<SVGGElement>("g")) {
-    const entry = _app.syncView.entryAt(g);
-    if (!entry) continue;
-    const b = unionBoxInSvgRoot(g, invSvgCtm, null);
-    if (!b) continue;
-    const midY = (b.minY + b.maxY) * 0.5;
-    if (Math.abs(midY - coreMidY) > rowTol) continue;
-
-    if (entry.kind === "note" && entry.id !== noteId) {
-      const m = getNoteCoreMetrics(g, invSvgCtm, b);
-      if (m.box.minX > coreBox.maxX - 1 && m.box.minX < nextBoundaryMinX) {
-        nextBoundaryMinX = m.box.minX;
-      }
-      continue;
-    }
-
-    if ((entry.kind as string) === "rest") {
-      if (b.minX > coreBox.maxX - 1 && b.minX < nextBoundaryMinX) {
-        nextBoundaryMinX = b.minX;
-      }
-      continue;
-    }
-
-    if (entry.kind === "sustain") {
-      sustainEls.add(g);
-      const cx = (b.minX + b.maxX) * 0.5;
-      if (entry.id === noteId) {
-        sameIdSustains.push(b);
-      } else if (cx > coreBox.maxX) {
-        nearbySustains.push(b);
-      }
-    }
-  }
-
-  for (const el of svg.querySelectorAll<SVGGraphicsElement>("text, line, rect, path")) {
-    if (el.closest(".sl-ab-band, .sl-ab-marker, .sl-sustain-cursor")) continue;
-    let covered = false;
-    for (const sg of sustainEls) {
-      if (sg.contains(el)) { covered = true; break; }
-    }
-    if (covered) continue;
-
-    const entry = _app.syncView.entryAt(el);
-    if (!entry || entry.kind !== "sustain") continue;
-    const b = unionBoxInSvgRoot(el, invSvgCtm, null);
-    if (!b) continue;
-    const midY = (b.minY + b.maxY) * 0.5;
-    if (Math.abs(midY - coreMidY) > rowTol) continue;
-
-    const cx = (b.minX + b.maxX) * 0.5;
-    if (entry.id === noteId) {
-      sameIdSustains.push(b);
-    } else if (cx > coreBox.maxX) {
-      nearbySustains.push(b);
-    }
-  }
-
-  for (const txt of svg.querySelectorAll<SVGTextElement>("text")) {
-    if (!isRestZeroText(txt.textContent || "")) continue;
-    const entry = _app.syncView.entryAt(txt);
-    if (entry && entry.kind === "lyric") continue;
-    const b = unionBoxInSvgRoot(txt, invSvgCtm, null);
-    if (!b) continue;
-    const midY = (b.minY + b.maxY) * 0.5;
-    if (Math.abs(midY - coreMidY) <= rowTol && b.minX > coreBox.maxX - 1 && b.minX < nextBoundaryMinX) {
-      nextBoundaryMinX = b.minX;
-    }
-  }
-
-  let chosen =
-    sameIdSustains.length > 0
-      ? sameIdSustains
-      : nearbySustains.filter((b) => (b.minX + b.maxX) * 0.5 < nextBoundaryMinX);
-
-  if (chosen.length === 0) {
-    const dashTexts: Box2D[] = [];
-    for (const txt of svg.querySelectorAll<SVGTextElement>("text")) {
-      if (!isSustainDashText(txt.textContent || "")) continue;
-      const entry = _app.syncView.entryAt(txt);
-      if (entry && entry.kind === "lyric") continue;
-      const b = unionBoxInSvgRoot(txt, invSvgCtm, null);
-      if (!b) continue;
-      const midY = (b.minY + b.maxY) * 0.5;
-      const cx = (b.minX + b.maxX) * 0.5;
-      if (Math.abs(midY - coreMidY) <= dashVerticalTol && cx > coreBox.maxX && cx < nextBoundaryMinX) {
-        dashTexts.push(b);
-      }
-    }
-    chosen = dashTexts;
-  }
-
-  if (chosen.length === 0) {
-    const dashShapes: Box2D[] = [];
-    for (const shape of svg.querySelectorAll<SVGGraphicsElement>("line, rect, path")) {
-      if (shape.closest(".sl-ab-band, .sl-ab-marker, .sl-sustain-cursor")) continue;
-      if (isProtectedCursorEl(shape)) continue;
-      const entry = _app.syncView.entryAt(shape);
-      if (entry && (entry.kind === "note" || entry.kind === "lyric" || (entry.kind as string) === "rest")) continue;
-      const b = unionBoxInSvgRoot(shape, invSvgCtm, null);
-      if (!b) continue;
-      const bw = b.maxX - b.minX;
-      const bh = b.maxY - b.minY;
-      const midY = (b.minY + b.maxY) * 0.5;
-      const cx = (b.minX + b.maxX) * 0.5;
-      if (
-        bw >= 4 &&
-        bw <= 36 &&
-        bh <= 5.5 &&
-        Math.abs(midY - coreMidY) <= dashVerticalTol &&
-        cx > coreBox.maxX &&
-        cx < nextBoundaryMinX
-      ) {
-        dashShapes.push(b);
-      }
-    }
-    chosen = dashShapes;
-  }
-
-  chosen.sort((a, b) => a.minX - b.minX);
-  return chosen;
-}
-
-/** 搜尋緊接在當前音符後、下一個音符前的所有簡譜休止符 0（支援同小節、跨小節與換行／換頁） */
-function findFollowingRestTargets(
-  scorePane: HTMLElement,
-  info: NonNullable<ReturnType<typeof getTimeline>>,
-  noteId: ElementId,
-  noteSvg: SVGSVGElement,
-  coreBox: Box2D,
-  coreMidY: number,
-  coreH: number,
-  noteSpan: { from: number; to: number },
-  pass: number,
-): { targets: CursorTarget[]; nextNoteStart: number | null } {
-  if (!_app) return { targets: [], nextNoteStart: null };
-
-  const svgs = Array.from(scorePane.querySelectorAll<SVGSVGElement>(".score-page-wrap svg"));
-  const noteSvgIdx = svgs.indexOf(noteSvg);
-  if (noteSvgIdx < 0) return { targets: [], nextNoteStart: null };
-
-  const rowTol = Math.max(18, coreH * 1.05);
-  const minRestH = Math.max(6, coreH * 0.45);
-
-  let nextNote: { t: number; svgIdx: number; coreBox: Box2D; midY: number } | null = null;
-  const seenNoteIds = new Set<ElementId>();
-
-  for (let sIdx = noteSvgIdx; sIdx < svgs.length; sIdx++) {
-    const svg = svgs[sIdx]!;
-    const ctm = svg.getScreenCTM();
-    if (!ctm) continue;
-    const inv = ctm.inverse();
-
-    for (const g of svg.querySelectorAll<SVGGElement>("g")) {
-      const entry = _app.syncView.entryAt(g);
-      if (!entry || entry.kind !== "note" || entry.id === noteId || seenNoteIds.has(entry.id)) continue;
-      seenNoteIds.add(entry.id);
-      const t = anchorSeconds(info.tl, info.spq, { id: entry.id, pass });
-      if (t === null || t < noteSpan.to - 0.008) continue;
-      if (nextNote && t >= nextNote.t) continue;
-      const b = unionBoxInSvgRoot(g, inv, null);
-      if (!b) continue;
-      const m = getNoteCoreMetrics(g, inv, b);
-      nextNote = { t, svgIdx: sIdx, coreBox: m.box, midY: m.midY };
-    }
-  }
-
-  const nextNoteStart = nextNote ? nextNote.t : null;
-  const maxSvgIdx = nextNote ? nextNote.svgIdx : noteSvgIdx;
-
-  if (nextNoteStart !== null && nextNoteStart <= noteSpan.to + 0.03) {
-    return { targets: [], nextNoteStart };
-  }
-
-  const collected: { svg: SVGSVGElement; box: Box2D; svgIdx: number; midY: number; relStart?: number; relEnd?: number }[] = [];
-
-  for (let sIdx = noteSvgIdx; sIdx <= maxSvgIdx; sIdx++) {
-    const svg = svgs[sIdx]!;
-    const ctm = svg.getScreenCTM();
-    if (!ctm) continue;
-    const inv = ctm.inverse();
-
-    const candidateBoxes: { box: Box2D; restId: ElementId | null }[] = [];
-    const coveredTexts = new Set<Element>();
-
-    for (const g of svg.querySelectorAll<SVGGElement>("g")) {
-      const entry = _app.syncView.entryAt(g);
-      if (!entry || (entry.kind as string) !== "rest") continue;
-      const b = unionBoxInSvgRoot(g, inv, null);
-      if (!b) continue;
-      const m = getNoteCoreMetrics(g, inv, b);
-      candidateBoxes.push({ box: m.box, restId: entry.id });
-      g.querySelectorAll("text").forEach((t) => coveredTexts.add(t));
-    }
-
-    for (const txt of svg.querySelectorAll<SVGTextElement>("text")) {
-      if (coveredTexts.has(txt)) continue;
-      if (!isRestZeroText(txt.textContent || "")) continue;
-      const entry = _app.syncView.entryAt(txt);
-      if (entry && entry.kind === "lyric") continue;
-      const b = unionBoxInSvgRoot(txt, inv, null);
-      if (!b) continue;
-      if (b.maxY - b.minY < minRestH) continue;
-      candidateBoxes.push({ box: b, restId: null });
-    }
-
-    // 去重：避免父子 <g> 或重疊節點重複收錄同一個 0
-    const deduped: { box: Box2D; restId: ElementId | null }[] = [];
-    for (const cand of candidateBoxes) {
-      const cx = (cand.box.minX + cand.box.maxX) * 0.5;
-      const cy = (cand.box.minY + cand.box.maxY) * 0.5;
-      const dup = deduped.find((ex) => {
-        const exX = (ex.box.minX + ex.box.maxX) * 0.5;
-        const exY = (ex.box.minY + ex.box.maxY) * 0.5;
-        return Math.abs(cx - exX) <= 4 && Math.abs(cy - exY) <= 6;
-      });
-      if (!dup) {
-        deduped.push(cand);
-      } else if (dup.restId === null && cand.restId !== null) {
-        dup.restId = cand.restId;
-      }
-    }
-
-    for (const cand of deduped) {
-      const b = cand.box;
-      const cx = (b.minX + b.maxX) * 0.5;
-      const midY = (b.minY + b.maxY) * 0.5;
-      const onStartRow = sIdx === noteSvgIdx && Math.abs(midY - coreMidY) <= rowTol;
-      const onEndRow = nextNote !== null && sIdx === nextNote.svgIdx && Math.abs(midY - nextNote.midY) <= rowTol;
-
-      if (onStartRow && onEndRow) {
-        if (cx <= coreBox.maxX + 1 || cx >= nextNote!.coreBox.minX - 1) continue;
-      } else if (onStartRow) {
-        if (cx <= coreBox.maxX + 1) continue;
-      } else if (onEndRow) {
-        if (cx >= nextNote!.coreBox.minX - 1) continue;
-      } else {
-        if (sIdx === noteSvgIdx && midY <= coreMidY + rowTol) continue;
-        if (nextNote && sIdx === nextNote.svgIdx && midY >= nextNote.midY - rowTol) continue;
-        if (!nextNote && sIdx > noteSvgIdx) continue;
-      }
-
-      let relStart: number | undefined;
-      let relEnd: number | undefined;
-      if (cand.restId !== null) {
-        const rs = spanSeconds(info.tl, info.spq, { id: cand.restId, pass }, { id: cand.restId, pass });
-        if (rs && rs.to > rs.from && rs.from >= noteSpan.to - 0.03) {
-          relStart = rs.from - noteSpan.from;
-          relEnd = rs.to - noteSpan.from;
-        }
-      }
-
-      collected.push({
-        svg,
-        box: b,
-        svgIdx: sIdx,
-        midY,
-        relStart,
-        relEnd,
-      });
-    }
-  }
-
-  // 以垂直容差聚類分列後再依 X 由左至右排序，徹底避免跨行半格進位導致順序錯亂
-  collected.sort((a, b) => a.svgIdx - b.svgIdx || a.midY - b.midY);
-  const withRow: (typeof collected[number] & { rowGroup: number })[] = [];
-  let rowGroup = 0;
-  let anchorSvg = -1;
-  let anchorMidY = 0;
-
-  for (const item of collected) {
-    if (item.svgIdx !== anchorSvg || Math.abs(item.midY - anchorMidY) > rowTol) {
-      rowGroup++;
-      anchorSvg = item.svgIdx;
-      anchorMidY = item.midY;
-    }
-    withRow.push({ ...item, rowGroup });
-  }
-
-  withRow.sort((a, b) => a.svgIdx - b.svgIdx || a.rowGroup - b.rowGroup || a.box.minX - b.box.minX);
-  return {
-    targets: withRow.map(({ svg, box, relStart, relEnd }) => ({ svg, box, relStart, relEnd })),
-    nextNoteStart,
-  };
-}
-
-function renderGhostCursor(
-  scorePane: HTMLElement,
-  target: CursorTarget,
-  matchedSvg: SVGSVGElement,
-  origBox: Box2D,
-  origStyle: { rx: string; ry: string; fill: string; stroke: string; strokeWidth: string },
-): DOMRect {
-  for (const stale of scorePane.querySelectorAll(".sl-sustain-cursor")) {
-    if (stale.parentNode !== target.svg) stale.remove();
-  }
-
-  let ghost = target.svg.querySelector<SVGRectElement>(".sl-sustain-cursor");
-  if (!ghost) {
-    ghost = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-    ghost.setAttribute("class", "sl-sustain-cursor");
-    ghost.setAttribute("pointer-events", "none");
-    target.svg.appendChild(ghost);
-  }
-
-  const origW = Math.max(10, origBox.maxX - origBox.minX);
-  const origH = Math.max(12, origBox.maxY - origBox.minY);
-  const origMidY = (origBox.minY + origBox.maxY) * 0.5;
-  const targetMidY = (target.box.minY + target.box.maxY) * 0.5;
-  const sameLineAsOrig = target.svg === matchedSvg && Math.abs(targetMidY - origMidY) <= Math.max(24, origH * 0.7);
-
-  const targetW = Math.max(origW * 0.9, target.box.maxX - target.box.minX + 12);
-  const cx = (target.box.minX + target.box.maxX) * 0.5;
-  const y = sameLineAsOrig ? origBox.minY : target.box.minY - 6;
-  const h = sameLineAsOrig ? origH : Math.max(origH, target.box.maxY - target.box.minY + 12);
-
-  ghost.setAttribute("x", String(cx - targetW * 0.5));
-  ghost.setAttribute("y", String(y));
-  ghost.setAttribute("width", String(targetW));
-  ghost.setAttribute("height", String(h));
-  ghost.setAttribute("rx", origStyle.rx);
-  ghost.setAttribute("ry", origStyle.ry);
-  ghost.setAttribute("fill", origStyle.fill);
-  ghost.setAttribute("stroke", origStyle.stroke);
-  ghost.setAttribute("stroke-width", origStyle.strokeWidth);
-
-  return ghost.getBoundingClientRect();
-}
-
-function stepCachedTargets(
-  scorePane: HTMLElement,
-  officialEl: HTMLElement | SVGElement | null,
-  elapsedSec: number,
-): DOMRect | null {
-  if (!_sustainState) return null;
-  const { noteDur, totalWindowSec, sustainTargets, restTargets, matchedSvg, origBox, origStyle } = _sustainState;
-
-  let activeTarget: CursorTarget | null = null;
-
-  if (elapsedSec < noteDur || restTargets.length === 0) {
-    if (sustainTargets.length > 0) {
-      const totalSteps = sustainTargets.length + 1;
-      const step = Math.min(sustainTargets.length, Math.max(0, Math.floor((elapsedSec / noteDur) * totalSteps)));
-      if (step > 0) activeTarget = sustainTargets[step - 1]!;
-    }
-  } else {
-    const restDurTotal = Math.max(0.08, totalWindowSec - noteDur);
-    const allHaveTiming = restTargets.every(
-      (rt, idx) =>
-        rt.relStart !== undefined &&
-        rt.relEnd !== undefined &&
-        rt.relEnd > rt.relStart &&
-        (idx === 0 || rt.relStart >= (restTargets[idx - 1]!.relStart ?? 0) - 0.01),
-    );
-    const exactMatch = allHaveTiming
-      ? restTargets.find(
-          (rt) => elapsedSec >= rt.relStart! - 0.01 && elapsedSec < rt.relEnd! - 0.01,
-        )
-      : undefined;
-
-    if (exactMatch) {
-      activeTarget = exactMatch;
-    } else if (allHaveTiming && elapsedSec >= restTargets[restTargets.length - 1]!.relStart! - 0.01) {
-      activeTarget = restTargets[restTargets.length - 1]!;
-    } else {
-      const restElapsed = Math.max(0, elapsedSec - noteDur);
-      const rIdx = Math.min(restTargets.length - 1, Math.floor((restElapsed / restDurTotal) * restTargets.length));
-      activeTarget = restTargets[rIdx]!;
-    }
-  }
-
-  if (!activeTarget) {
-    if (_hiddenCursorEl) {
-      _hiddenCursorEl.style.opacity = "";
-      _hiddenCursorEl = null;
-    }
-    scorePane.querySelectorAll(".sl-sustain-cursor").forEach((el) => el.remove());
-    return null;
-  }
-
-  if (officialEl) {
-    if (_hiddenCursorEl && _hiddenCursorEl !== officialEl) {
-      _hiddenCursorEl.style.opacity = "";
-    }
-    _hiddenCursorEl = officialEl;
-    officialEl.style.opacity = "0";
-  }
-
-  return renderGhostCursor(scorePane, activeTarget, matchedSvg, origBox, origStyle);
-}
-
-function updateSustainCursor(
-  scorePane: HTMLElement,
-  cursor: { el: HTMLElement | SVGElement; rect: DOMRect } | null,
-): DOMRect | null {
-  if (!_app || _app.mode === "mixed") {
-    cleanupSustainCursor(scorePane);
-    return null;
-  }
-
-  const nowMs = performance.now();
-
-  if (!cursor) {
-    if (_sustainState && _sustainState.restTargets.length > 0) {
-      const elapsedSec = (nowMs - _sustainState.enterMs) / 1000;
-      if (elapsedSec <= _sustainState.totalWindowSec + 0.45) {
-        return stepCachedTargets(scorePane, null, Math.min(elapsedSec, _sustainState.totalWindowSec));
-      }
-    }
-    cleanupSustainCursor(scorePane);
-    return null;
-  }
-
-  const page = cursor.el.closest<HTMLElement>(".score-page-wrap");
-  const svg =
-    cursor.el instanceof SVGElement
-      ? cursor.el.ownerSVGElement
-      : page?.querySelector<SVGSVGElement>("svg") ?? null;
-  if (!svg) {
-    cleanupSustainCursor(scorePane);
-    return null;
-  }
-
-  const svgCtm = svg.getScreenCTM();
-  if (!svgCtm) return null;
-  const invSvgCtm = svgCtm.inverse();
-
-  let matchedId: ElementId | null = null;
-  let matchedBox: Box2D | null = null;
-  let matchedEl: SVGGraphicsElement | null = null;
-  let matchedKind: "note" | "other" = "note";
-  let bestScore = Infinity;
-  const curCenterX = (cursor.rect.left + cursor.rect.right) * 0.5;
-  const curCenterY = (cursor.rect.top + cursor.rect.bottom) * 0.5;
-
-  for (const g of svg.querySelectorAll<SVGGElement>("g")) {
-    const entry = _app.syncView.entryAt(g);
-    if (!entry) continue;
-    const kind = entry.kind as string;
-    if (kind !== "note" && kind !== "rest" && kind !== "sustain") continue;
-    const gr = g.getBoundingClientRect();
-    if (gr.width <= 0 && gr.height <= 0) continue;
-    if (
-      gr.right < cursor.rect.left - 6 ||
-      gr.left > cursor.rect.right + 6 ||
-      gr.bottom < cursor.rect.top - 6 ||
-      gr.top > cursor.rect.bottom + 6
-    ) {
-      continue;
-    }
-    const dist =
-      Math.abs((gr.left + gr.right) * 0.5 - curCenterX) +
-      Math.abs((gr.top + gr.bottom) * 0.5 - curCenterY) * 0.25;
-    if (dist < bestScore) {
-      const box = unionBoxInSvgRoot(g, invSvgCtm, null);
-      if (box) {
-        bestScore = dist;
-        if (kind === "note") {
-          matchedKind = "note";
-          matchedId = entry.id;
-          matchedBox = box;
-          matchedEl = g;
-        } else {
-          matchedKind = "other";
-          matchedId = null;
-          matchedBox = null;
-          matchedEl = null;
-        }
-      }
-    }
-  }
-
-  // 同場比較獨立的「0」與「—」文字，若游標中心更靠近 0 / — 則代表官方游標已在該拍上
-  for (const txt of svg.querySelectorAll<SVGTextElement>("text")) {
-    const content = txt.textContent || "";
-    if (!isRestZeroText(content) && !isSustainDashText(content)) continue;
-    const entry = _app.syncView.entryAt(txt);
-    if (entry && entry.kind === "lyric") continue;
-    const tr = txt.getBoundingClientRect();
-    if (tr.width <= 0 && tr.height <= 0) continue;
-    if (
-      tr.right < cursor.rect.left - 4 ||
-      tr.left > cursor.rect.right + 4 ||
-      tr.bottom < cursor.rect.top - 4 ||
-      tr.top > cursor.rect.bottom + 4
-    ) {
-      continue;
-    }
-    const dist =
-      Math.abs((tr.left + tr.right) * 0.5 - curCenterX) +
-      Math.abs((tr.top + tr.bottom) * 0.5 - curCenterY) * 0.25;
-    if (dist <= bestScore) {
-      bestScore = dist;
-      matchedKind = "other";
-      matchedId = null;
-      matchedBox = null;
-      matchedEl = null;
-    }
-  }
-
-  if (matchedKind !== "note" || matchedId === null || !matchedBox || !matchedEl) {
-    cleanupSustainCursor(scorePane);
-    return null;
-  }
-
-  const pageIdx = Array.from(scorePane.querySelectorAll(".score-page-wrap")).indexOf(page ?? svg);
-  const noteKey = `${pageIdx}:${matchedId}`;
-  const curProgress = _progressEl ? Number(_progressEl.value) : 0;
-
-  const isSameCursorSpot =
-    _sustainState !== null &&
-    _sustainState.key === noteKey &&
-    Math.abs(cursor.rect.left - _sustainState.lastCursorLeft) <= 6 &&
-    Math.abs(cursor.rect.top - _sustainState.lastCursorTop) <= 6;
-
-  const progressRewound =
-    _sustainState !== null &&
-    _progressEl !== null &&
-    curProgress < _sustainState.lastProgressVal - 0.005;
-
-  const needRebuild =
-    !isSameCursorSpot ||
-    progressRewound ||
-    (_sustainState !== null &&
-      (nowMs - _sustainState.enterMs) / 1000 > _sustainState.totalWindowSec + 0.85);
-
-  if (needRebuild) {
-    const info = getTimeline();
-    if (!info) {
-      cleanupSustainCursor(scorePane);
-      return null;
-    }
-    const pass = 1;
-    const span = spanSeconds(info.tl, info.spq, { id: matchedId, pass }, { id: matchedId, pass });
-    if (!span || span.to <= span.from) {
-      cleanupSustainCursor(scorePane);
-      return null;
-    }
-
-    const core = getNoteCoreMetrics(matchedEl, invSvgCtm, matchedBox);
-    const sustainBoxes = findSustainBoxesForNote(svg, invSvgCtm, matchedId, core.box, core.midY, core.height);
-    const { targets: restTargets, nextNoteStart } = findFollowingRestTargets(
-      scorePane,
-      info,
-      matchedId,
-      svg,
-      core.box,
-      core.midY,
-      core.height,
-      span,
-      pass,
-    );
-
-    if (sustainBoxes.length === 0 && restTargets.length === 0) {
-      cleanupSustainCursor(scorePane);
-      return null;
-    }
-
-    const noteDur = Math.max(0.08, span.to - span.from);
-    const restGap =
-      restTargets.length === 0
-        ? 0
-        : nextNoteStart !== null && nextNoteStart > span.to + 0.03
-          ? nextNoteStart - span.to
-          : restTargets.length * Math.max(0.18, info.spq);
-
-    const origBox =
-      cursor.el instanceof SVGGraphicsElement
-        ? unionBoxInSvgRoot(cursor.el, invSvgCtm, null) ?? clientRectToSvgRoot(cursor.rect, invSvgCtm)
-        : clientRectToSvgRoot(cursor.rect, invSvgCtm);
-
-    const st = getComputedStyle(cursor.el);
-    const origStyle = {
-      rx: cursor.el.getAttribute("rx") || "4",
-      ry: cursor.el.getAttribute("ry") || "4",
-      fill: isOrangeCursorColor(st.fill)
-        ? st.fill
-        : isOrangeCursorColor(st.backgroundColor)
-          ? st.backgroundColor
-          : "rgba(234, 88, 12, 0.22)",
-      stroke: isOrangeCursorColor(st.stroke)
-        ? st.stroke
-        : isOrangeCursorColor(st.borderColor)
-          ? st.borderColor
-          : "#ea580c",
-      strokeWidth: cursor.el.getAttribute("stroke-width") || "1.5",
-    };
-
-    _sustainState = {
-      key: noteKey,
-      enterMs: nowMs,
-      noteDur,
-      totalWindowSec: noteDur + restGap,
-      lastCursorLeft: cursor.rect.left,
-      lastCursorTop: cursor.rect.top,
-      lastProgressVal: curProgress,
-      matchedSvg: svg,
-      origBox,
-      origStyle,
-      sustainTargets: sustainBoxes.map((box) => ({ svg, box })),
-      restTargets,
-    };
-  } else if (_sustainState) {
-    _sustainState.lastProgressVal = curProgress;
-  }
-
-  const elapsedSec = (nowMs - _sustainState!.enterMs) / 1000;
-  return stepCachedTargets(scorePane, cursor.el, Math.min(elapsedSec, _sustainState!.totalWindowSec));
-}
-
-function startPlaybackScrollGuard(scorePane: HTMLElement): void {
-  if (_playbackGuardRaf) return;
-  let lastContentTop = -Infinity;
-  let pendingEnsureFrames = 0;
-
-  const step = () => {
-    if (!_app || !_app.playback.busy) {
-      cleanupSustainCursor(scorePane);
-      _playbackGuardRaf = 0;
-      return;
-    }
-
-    const cursor = findOfficialPlaybackCursor(scorePane);
-    const activeRect = updateSustainCursor(scorePane, cursor) ?? cursor?.rect ?? null;
-
-    if (activeRect) {
-      const paneRect = scorePane.getBoundingClientRect();
-      const contentTop = activeRect.top - paneRect.top + scorePane.scrollTop;
-
-      if (Math.abs(contentTop - lastContentTop) > 22) {
-        lastContentTop = contentTop;
-        pendingEnsureFrames = 8;
-      }
-
-      const padTop = 34;
-      const minSystemSpan = Math.max(activeRect.height + 48, 130);
-      const visibleTopNeed = activeRect.top - padTop;
-      const visibleBottomNeed = Math.max(activeRect.bottom + 42, activeRect.top + minSystemSpan);
-
-      const isClippedTop = visibleTopNeed < paneRect.top + 4;
-      const isClippedBottom = visibleBottomNeed > paneRect.bottom - 6;
-
-      if ((pendingEnsureFrames > 0 || isClippedBottom) && (isClippedTop || isClippedBottom)) {
-        const systemTotalH = visibleBottomNeed - visibleTopNeed;
-        const maxScroll = Math.max(0, scorePane.scrollHeight - scorePane.clientHeight);
-        let desiredScrollTop: number;
-
-        if (systemTotalH <= paneRect.height - 16) {
-          desiredScrollTop = scorePane.scrollTop + (visibleTopNeed - paneRect.top) - 16;
-        } else {
-          const centerY = (activeRect.top + activeRect.bottom) * 0.5;
-          desiredScrollTop = scorePane.scrollTop + (centerY - (paneRect.top + paneRect.height * 0.5));
-        }
-
-        desiredScrollTop = Math.max(0, Math.min(maxScroll, desiredScrollTop));
-        if (Math.abs(desiredScrollTop - scorePane.scrollTop) > 3) {
-          scorePane.scrollTop = desiredScrollTop;
-        }
-      }
-
-      if (pendingEnsureFrames > 0) pendingEnsureFrames--;
-    }
-
-    _playbackGuardRaf = requestAnimationFrame(step);
-  };
-
-  _playbackGuardRaf = requestAnimationFrame(step);
-}
-
-// ---- 選段繪製：單一連續半透明底色 + 清晰起點(A)/終點(B)標記 ----
-function clearAbBands() {
-  _scorePane?.querySelectorAll(".sl-ab-band, .sl-ab-marker").forEach((el) => el.remove());
-}
-
-interface NoteRootBox {
-  id: ElementId;
-  t: number;
-  minX: number;
-  minY: number;
-  maxX: number;
-  maxY: number;
-}
-
-function drawEndpointMarker(
-  svg: SVGSVGElement,
-  x: number,
-  topY: number,
-  botY: number,
-  side: "start" | "end",
-  label: string,
-  color: string,
-) {
-  const NS = "http://www.w3.org/2000/svg";
-  const g = document.createElementNS(NS, "g");
-  g.setAttribute("class", "sl-ab-marker");
-  g.setAttribute("pointer-events", "none");
-
-  const arm = side === "start" ? 7 : -7;
-  const path = document.createElementNS(NS, "path");
-  path.setAttribute("d", `M${x + arm} ${topY} L${x} ${topY} L${x} ${botY} L${x + arm} ${botY}`);
-  path.setAttribute("fill", "none");
-  path.setAttribute("stroke", color);
-  path.setAttribute("stroke-width", "2.2");
-  path.setAttribute("stroke-linecap", "round");
-  path.setAttribute("stroke-linejoin", "round");
-  g.appendChild(path);
-
-  const badgeW = 16;
-  const badgeH = 15;
-  const bx = side === "start" ? x - 2 : x - badgeW + 2;
-  const by = topY - badgeH - 2;
-
-  const bg = document.createElementNS(NS, "rect");
-  bg.setAttribute("x", String(bx));
-  bg.setAttribute("y", String(by));
-  bg.setAttribute("width", String(badgeW));
-  bg.setAttribute("height", String(badgeH));
-  bg.setAttribute("rx", "4");
-  bg.setAttribute("fill", color);
-  g.appendChild(bg);
-
-  const txt = document.createElementNS(NS, "text");
-  txt.setAttribute("x", String(bx + badgeW * 0.5));
-  txt.setAttribute("y", String(by + badgeH * 0.5 + 3.6));
-  txt.setAttribute("text-anchor", "middle");
-  txt.setAttribute("font-size", "10");
-  txt.setAttribute("font-weight", "700");
-  txt.setAttribute("fill", "#ffffff");
-  txt.textContent = label;
-  g.appendChild(txt);
-
-  svg.appendChild(g);
-}
-
-function paintAbBands() {
-  clearAbBands();
-  if (!_app || !_scorePane) return;
-
-  const activeRange = _abPreviewRange
-    ? { firstId: _abPreviewRange.startId, lastId: _abPreviewRange.endId, tFrom: _abPreviewRange.tFrom, tTo: _abPreviewRange.tTo, preview: true }
-    : _abLoop
-      ? { firstId: _abLoop.first.id, lastId: _abLoop.last.id, tFrom: _abLoop.tFrom, tTo: _abLoop.tTo, preview: false }
-      : null;
-
-  if (!activeRange && _abPendingStart === null) return;
-  const info = activeRange ? getTimeline() : null;
-  const NS = "http://www.w3.org/2000/svg";
-
-  for (const svg of _scorePane.querySelectorAll<SVGSVGElement>(".score-page-wrap svg")) {
-    const svgCtm = svg.getScreenCTM();
-    if (!svgCtm) continue;
-    const invSvgCtm = svgCtm.inverse();
-
-    const matchedNotes: NoteRootBox[] = [];
-    let pendingBox: NoteRootBox | null = null;
-
-    if (_app.mode === "mixed") {
-      const seenIds = new Set<ElementId>();
-      for (const g of svg.querySelectorAll<SVGGElement>("g")) {
-        const id = _app.painter.noteAt(g);
-        if (id === null || seenIds.has(id)) continue;
-        seenIds.add(id);
-
-        if (_abPendingStart !== null && id === _abPendingStart) {
-          let merged: { minX: number; minY: number; maxX: number; maxY: number } | null = null;
-          for (const nel of _app.painter.noteEls(id)) {
-            if (nel.ownerSVGElement === svg) merged = unionBoxInSvgRoot(nel, invSvgCtm, merged);
-          }
-          if (merged) pendingBox = { id, t: 0, ...merged };
-        }
-
-        if (activeRange && info) {
-          const t = anchorSeconds(info.tl, info.spq, { id, pass: 1 });
-          if (t !== null && t >= activeRange.tFrom - 0.002 && t <= activeRange.tTo + 0.002) {
-            let merged: { minX: number; minY: number; maxX: number; maxY: number } | null = null;
-            for (const nel of _app.painter.noteEls(id)) {
-              if (nel.ownerSVGElement === svg) merged = unionBoxInSvgRoot(nel, invSvgCtm, merged);
-            }
-            if (merged) matchedNotes.push({ id, t, ...merged });
-          }
-        }
-      }
-    } else {
-      const boxById = new Map<ElementId, NoteRootBox>();
-      for (const g of svg.querySelectorAll<SVGGElement>("g")) {
-        const entry = _app.syncView.entryAt(g);
-        if (!entry || (entry.kind !== "note" && entry.kind !== "sustain")) continue;
-        const id = entry.id;
-
-        if (_abPendingStart !== null && id === _abPendingStart && entry.kind === "note") {
-          const merged = unionBoxInSvgRoot(g, invSvgCtm, pendingBox);
-          if (merged) pendingBox = { id, t: 0, ...merged };
-        }
-
-        if (activeRange && info) {
-          const t = anchorSeconds(info.tl, info.spq, { id, pass: 1 });
-          if (t !== null && t >= activeRange.tFrom - 0.002 && t <= activeRange.tTo + 0.002) {
-            const merged = unionBoxInSvgRoot(g, invSvgCtm, boxById.get(id) ?? null);
-            if (merged) boxById.set(id, { id, t, ...merged });
-          }
-        }
-      }
-      matchedNotes.push(...boxById.values());
-    }
-
-    if (pendingBox && !activeRange) {
-      drawEndpointMarker(svg, pendingBox.minX - 6, pendingBox.minY - 6, pendingBox.maxY + 6, "start", "A", "#b88b4a");
-      continue;
-    }
-
-    if (!activeRange || matchedNotes.length === 0) continue;
-
-    matchedNotes.sort((a, b) => a.t - b.t || a.minX - b.minX);
-
-    interface SystemSpan {
-      minX: number;
-      minY: number;
-      maxX: number;
-      maxY: number;
-      lastX: number;
-      hasStart: boolean;
-      hasEnd: boolean;
-    }
-
-    const systems: SystemSpan[] = [];
-    for (const note of matchedNotes) {
-      const prev = systems[systems.length - 1];
-      const wrappedToNextLine =
-        prev &&
-        ((note.minX < prev.lastX - 45 && note.minY > prev.minY + 28) ||
-          note.minY > prev.maxY + 55 ||
-          note.maxY < prev.minY - 55);
-
-      if (!prev || wrappedToNextLine) {
-        systems.push({
-          minX: note.minX,
-          minY: note.minY,
-          maxX: note.maxX,
-          maxY: note.maxY,
-          lastX: note.minX,
-          hasStart: note.id === activeRange.firstId,
-          hasEnd: note.id === activeRange.lastId,
-        });
-      } else {
-        if (note.minX < prev.minX) prev.minX = note.minX;
-        if (note.minY < prev.minY) prev.minY = note.minY;
-        if (note.maxX > prev.maxX) prev.maxX = note.maxX;
-        if (note.maxY > prev.maxY) prev.maxY = note.maxY;
-        if (note.minX > prev.lastX) prev.lastX = note.minX;
-        if (note.id === activeRange.firstId) prev.hasStart = true;
-        if (note.id === activeRange.lastId) prev.hasEnd = true;
-      }
-    }
-
-    const tintFill = activeRange.preview ? "rgba(184, 139, 74, 0.16)" : "rgba(91, 122, 98, 0.14)";
-    const markerColor = activeRange.preview ? "#b88b4a" : "#5b7a62";
-
-    for (const sys of systems) {
-      const padX = 7;
-      const padY = 7;
-      const left = sys.minX - padX;
-      const top = sys.minY - padY;
-      const right = sys.maxX + padX;
-      const bottom = sys.maxY + padY;
-
-      const rect = document.createElementNS(NS, "rect");
-      rect.setAttribute("class", "sl-ab-band");
-      rect.setAttribute("x", String(left));
-      rect.setAttribute("y", String(top));
-      rect.setAttribute("width", String(Math.max(4, right - left)));
-      rect.setAttribute("height", String(Math.max(8, bottom - top)));
-      rect.setAttribute("rx", "6");
-      rect.setAttribute("fill", tintFill);
-      rect.setAttribute("stroke", "none");
-      rect.setAttribute("pointer-events", "none");
-      svg.appendChild(rect);
-
-      if (sys.hasStart) {
-        drawEndpointMarker(svg, left, top, bottom, "start", "A", markerColor);
-      }
-      if (sys.hasEnd) {
-        drawEndpointMarker(svg, right, top, bottom, "end", "B", markerColor);
-      }
-    }
-  }
-}
-
-function clearAbLoop(stopLoopToggle = true) {
-  _abLoop = null;
-  _abPendingStart = null;
-  _abPreviewRange = null;
-  _rangePickMode = false;
-  clearAbBands();
-  if (_app && stopLoopToggle) {
-    _app.playback.setLoop(false);
-  }
-  notifyRange();
-}
-
-function buildOrderedRange(idA: ElementId, idB: ElementId) {
-  const info = getTimeline();
-  if (!info) return null;
-  const tA = anchorSeconds(info.tl, info.spq, { id: idA, pass: 1 });
-  const tB = anchorSeconds(info.tl, info.spq, { id: idB, pass: 1 });
-  if (tA === null || tB === null) return null;
-  if (tA <= tB) {
-    return { startId: idA, endId: idB, tFrom: tA, tTo: tB, info };
-  }
-  return { startId: idB, endId: idA, tFrom: tB, tTo: tA, info };
-}
-
-function applyAbLoopByIds(idA: ElementId, idB: ElementId): boolean {
-  if (!_app) return false;
-  const ordered = buildOrderedRange(idA, idB);
-  if (!ordered) return false;
-
-  const span = spanSeconds(
-    ordered.info.tl,
-    ordered.info.spq,
-    { id: ordered.startId, pass: 1 },
-    { id: ordered.endId, pass: 1 },
-  );
-  if (!span || span.to <= span.from) return false;
-
-  _abLoop = {
-    first: { id: ordered.startId, pass: 1 },
-    last: { id: ordered.endId, pass: 1 },
-    tFrom: ordered.tFrom,
-    tTo: ordered.tTo,
-  };
-  _abPendingStart = null;
-  _abPreviewRange = null;
-  _rangePickMode = false;
-  paintAbBands();
-  _app.playback.setLoop(true);
-  _app.playback.seekTo({ id: ordered.startId, pass: 1 });
-  if (!_app.playback.busy) void _app.playback.play();
-  notifyRange();
-  return true;
-}
-
-/**
- * 選段互動（電腦＋手機無衝突設計；修譜模式開啟時暫讓給可視化編輯）：
- * - 手機/觸控螢幕：正常滑動可順暢捲動樂譜；「長按約 350ms 設定起點 → 不離手直接拖曳至終點 → 放開完成選段」。
- *   （若先點擊工具列的「選段」SVG 鍵，則直接觸控拖曳即可選段，無需長按）
- * - 電腦滑鼠：直接左鍵按住拖曳（起點拖至終點）即可完成選段。
- */
-function wireDirectScoreSelection(scorePane: HTMLElement) {
-  const LONG_PRESS_MS = 350;
-  const MOVE_CANCEL_PX = 10;
-
-  let suppressClick = false;
-
-  // ---- 1. 滑鼠拖曳選段 ----
-  let mouseStart: { x: number; y: number; startId: ElementId | null } | null = null;
-  let mouseDragging = false;
-
-  const cleanupMouse = () => {
-    mouseStart = null;
-    mouseDragging = false;
-    _abPreviewRange = null;
-  };
-
-  scorePane.addEventListener("mousedown", (e) => {
-    if (e.button !== 0) return;
-    if (_editMode && !_rangePickMode) return;
-    const rc = scorePane.getBoundingClientRect();
-    if (e.clientX - rc.left >= scorePane.clientLeft + scorePane.clientWidth) return;
-    const startId = findNearestNoteId(scorePane, e.target as Element | null, e.clientX, e.clientY, 28);
-    mouseStart = { x: e.clientX, y: e.clientY, startId };
-    mouseDragging = false;
-  }, true);
-
-  window.addEventListener("mousemove", (e) => {
-    if (!mouseStart) return;
-    const dx = e.clientX - mouseStart.x;
-    const dy = e.clientY - mouseStart.y;
-    if (!mouseDragging && Math.hypot(dx, dy) < 9) return;
-    if (!mouseDragging) {
-      mouseDragging = true;
-      if (mouseStart.startId === null) {
-        mouseStart.startId = findNearestNoteId(scorePane, null, mouseStart.x, mouseStart.y, 44);
-      }
-      if (mouseStart.startId !== null) {
-        _abPendingStart = mouseStart.startId;
-        notifyRange();
-      }
-    }
-
-    if (mouseStart.startId !== null) {
-      const endId = findNearestNoteId(scorePane, e.target as Element | null, e.clientX, e.clientY, 38);
-      if (endId !== null) {
-        const ordered = buildOrderedRange(mouseStart.startId, endId);
-        if (ordered && ordered.tTo > ordered.tFrom) {
-          _abPreviewRange = { startId: ordered.startId, endId: ordered.endId, tFrom: ordered.tFrom, tTo: ordered.tTo };
-          paintAbBands();
-        } else {
-          _abPreviewRange = null;
-          paintAbBands();
-        }
-      }
-    }
-  });
-
-  window.addEventListener("mouseup", (e) => {
-    if (!mouseStart) return;
-    const st = mouseStart;
-    const wasDragging = mouseDragging;
-    cleanupMouse();
-
-    if (!wasDragging) return;
-    suppressClick = true;
-    setTimeout(() => { suppressClick = false; }, 60);
-
-    if (st.startId !== null) {
-      const endId = findNearestNoteId(scorePane, e.target as Element | null, e.clientX, e.clientY, 44);
-      if (endId !== null && applyAbLoopByIds(st.startId, endId)) {
-        return;
-      }
-    }
-
-    const info = getTimeline();
-    if (info) {
-      const rLeft = Math.min(st.x, e.clientX);
-      const rRight = Math.max(st.x, e.clientX);
-      const rTop = Math.min(st.y, e.clientY);
-      const rBottom = Math.max(st.y, e.clientY);
-      let minId: ElementId | null = null, minT = Infinity;
-      let maxId: ElementId | null = null, maxT = -Infinity;
-      const seen = new Set<ElementId>();
-
-      for (const g of scorePane.querySelectorAll<SVGGElement>(".score-page-wrap svg g")) {
-        const id = resolveNoteIdAt(g);
-        if (id === null || seen.has(id)) continue;
-        const b = g.getBoundingClientRect();
-        if (b.width <= 0 && b.height <= 0) continue;
-        if (b.right < rLeft || b.left > rRight || b.bottom < rTop || b.top > rBottom) continue;
-        seen.add(id);
-        const t = anchorSeconds(info.tl, info.spq, { id, pass: 1 });
-        if (t === null) continue;
-        if (t < minT) { minT = t; minId = id; }
-        if (t > maxT) { maxT = t; maxId = id; }
-      }
-      if (minId !== null && maxId !== null && maxT > minT && applyAbLoopByIds(minId, maxId)) {
-        return;
-      }
-    }
-
-    _abPendingStart = null;
-    paintAbBands();
-    notifyRange();
-  });
-
-  // ---- 2. 手機／觸控：長按設起點 → 拖曳至終點（與單指捲動、雙指縮放零衝突） ----
-  let touchTimer: number | null = null;
-  let touchActive = false;
-  let touchStartPt: { x: number; y: number } | null = null;
-  let touchStartId: ElementId | null = null;
-  let touchEndId: ElementId | null = null;
-
-  const clearTouchTimer = () => {
-    if (touchTimer !== null) {
-      clearTimeout(touchTimer);
-      touchTimer = null;
-    }
-  };
-
-  const resetTouchState = () => {
-    clearTouchTimer();
-    touchActive = false;
-    touchStartPt = null;
-    touchStartId = null;
-    touchEndId = null;
-    _abPreviewRange = null;
-  };
-
-  const activateTouchDrag = (x: number, y: number, target: Element | null) => {
-    const id = findNearestNoteId(scorePane, target, x, y, 42);
-    if (id === null) {
-      resetTouchState();
-      return;
-    }
-    touchActive = true;
-    touchStartId = id;
-    touchEndId = id;
-    _abPendingStart = id;
-    _abPreviewRange = null;
-    try { navigator.vibrate?.(18); } catch {}
-    paintAbBands();
-    notifyRange();
-  };
-
-  scorePane.addEventListener("touchstart", (e) => {
-    if (e.touches.length !== 1) {
-      resetTouchState();
-      paintAbBands();
-      notifyRange();
-      return;
-    }
-    if (_editMode && !_rangePickMode) return;
-    const t = e.touches[0]!;
-    touchStartPt = { x: t.clientX, y: t.clientY };
-    touchActive = false;
-    touchStartId = null;
-    touchEndId = null;
-
-    if (_rangePickMode) {
-      activateTouchDrag(t.clientX, t.clientY, e.target as Element | null);
-    } else {
-      clearTouchTimer();
-      const target = e.target as Element | null;
-      const sx = t.clientX;
-      const sy = t.clientY;
-      touchTimer = window.setTimeout(() => {
-        touchTimer = null;
-        activateTouchDrag(sx, sy, target);
-      }, LONG_PRESS_MS);
-    }
-  }, { passive: true, capture: true });
-
-  scorePane.addEventListener("touchmove", (e) => {
-    if (e.touches.length !== 1) {
-      if (touchActive) {
-        resetTouchState();
-        _abPendingStart = null;
-        paintAbBands();
-        notifyRange();
-      } else {
-        clearTouchTimer();
-      }
-      return;
-    }
-    const t = e.touches[0]!;
-
-    if (!touchActive) {
-      if (touchStartPt && Math.hypot(t.clientX - touchStartPt.x, t.clientY - touchStartPt.y) > MOVE_CANCEL_PX) {
-        clearTouchTimer();
-        touchStartPt = null;
-      }
-      return;
-    }
-
-    e.preventDefault();
-    const elUnder = document.elementFromPoint(t.clientX, t.clientY);
-    const id = findNearestNoteId(scorePane, elUnder, t.clientX, t.clientY, 44);
-    if (id !== null && touchStartId !== null) {
-      touchEndId = id;
-      const ordered = buildOrderedRange(touchStartId, id);
-      if (ordered && ordered.tTo > ordered.tFrom) {
-        _abPreviewRange = { startId: ordered.startId, endId: ordered.endId, tFrom: ordered.tFrom, tTo: ordered.tTo };
-      } else {
-        _abPreviewRange = null;
-      }
-      paintAbBands();
-    }
-  }, { passive: false, capture: true });
-
-  const finishTouch = () => {
-    clearTouchTimer();
-    if (!touchActive) {
-      resetTouchState();
-      return;
-    }
-    const sId = touchStartId;
-    const eId = touchEndId;
-    resetTouchState();
-    suppressClick = true;
-    setTimeout(() => { suppressClick = false; }, 120);
-
-    if (sId !== null && eId !== null && applyAbLoopByIds(sId, eId)) {
-      return;
-    }
-
-    _abPendingStart = null;
-    if (_rangePickMode) _rangePickMode = false;
-    paintAbBands();
-    notifyRange();
-  };
-
-  scorePane.addEventListener("touchend", finishTouch, { capture: true });
-  scorePane.addEventListener("touchcancel", () => {
-    const wasActive = touchActive;
-    resetTouchState();
-    if (wasActive) {
-      _abPendingStart = null;
-      paintAbBands();
-      notifyRange();
-    }
-  }, { capture: true });
-
-  scorePane.addEventListener("contextmenu", (e) => {
-    if (touchActive || touchTimer !== null || _rangePickMode) {
-      e.preventDefault();
-    }
-  });
-
-  scorePane.addEventListener("click", (e) => {
-    if (suppressClick) {
-      e.stopPropagation();
-      e.preventDefault();
-      suppressClick = false;
-    }
-  }, true);
-}
-
-/** 守護純 SVG 按鍵圖示，避免官方控制器切換狀態時覆蓋為文字 */
-function preserveIconButton(btn: HTMLButtonElement | null | undefined) {
-  if (!btn) return;
-  const svgHtml = btn.innerHTML;
-  if (!svgHtml.includes("<svg")) return;
-  const observer = new MutationObserver(() => {
-    if (!btn.querySelector("svg")) {
-      btn.innerHTML = svgHtml;
-    }
-  });
-  observer.observe(btn, { childList: true });
-}
-
-let _preloadScheduled = false;
-function scheduleBackgroundPreload() {
-  if (_preloadScheduled) return;
-  _preloadScheduled = true;
-
-  const warmModules = () => {
-    void import("./omrkit/runtime.browser")
-      .then((m) => m.browserRuntime.prepare("det"))
-      .catch(() => {});
-    void import("./rasteromr/browser").catch(() => {});
-    void import("./staffomr/browser").catch(() => {});
-    void import("./outlineomr/browser").catch(() => {});
-  };
-
-  const ric = (window as Window & {
-    requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
-  }).requestIdleCallback;
-
-  if (typeof ric === "function") {
-    ric(warmModules, { timeout: 600 });
-  } else {
-    setTimeout(warmModules, 80);
-  }
-}
-
-async function initEngine(opts: MountShellOptions): Promise<App> {
-  _onZoomChange = opts.onZoomChange;
-  _onRangeChange = opts.onRangeChange;
-  _onEditModeChange = opts.onEditModeChange;
-  _scorePane = opts.scorePane;
-  _progressEl = opts.progressEl ?? null;
-  _editToggleBtn = opts.editToggleBtn ?? null;
-  _editPanel = opts.editPanel ?? null;
-  if (_app) return _app;
-  if (_appPromise) return _appPromise;
-
-  _appPromise = (async () => {
-    initLang();
-    setMeasureBackend(browserMeasure);
-
-    // 啟動即並行預載 OMR Runtime、SMuFL 中繼資料與樂譜字型，縮短手機冷啟動時間
-    const runtimePrep = import("./omrkit/runtime.browser")
-      .then((m) => m.browserRuntime.prepare("det"))
-      .catch(() => {});
-
-    const fontsReady = registerBravura().then(() =>
-      ensureFontsReady([
-        { family: "Bravura", size: 40 },
-        { family: "Bravura Text", size: 20 },
-        { family: "Noto Serif TC", size: 28 },
-      ]),
-    );
-
-    const [meta] = await Promise.all([MetaData.shared(), fontsReady]);
-    void runtimePrep;
-
-    const app = new App(meta, opts.scorePane);
-    app.statusEl = opts.statusEl ?? null;
-    app.loadSettings();
-
-    // 掛載原版可視化修譜核心（停用其簡體內建按鈕牆，改由我們繁體分區面板呼叫 runVisualAction）
-    if (opts.visualEls) {
-      app.visual.attach({
-        ...opts.visualEls,
-        palette: null,
-        paletteBtn: null,
-      });
-      observeTraditionalText(opts.visualEls.mode);
-      observeTraditionalText(opts.visualEls.selInfo);
-      observeTraditionalText(opts.visualEls.beatCount);
-    }
-    observeTraditionalText(opts.statusEl);
-
-    const origVisualEnabled = app.visualEnabled.bind(app);
-    app.visualEnabled = () => _editMode && origVisualEnabled();
-    app.visual.showPalette = false;
-
-    app.mountEditor(opts.hiddenCodePane, SAMPLE);
-    app.stopPlayback();
-    app.clearPages();
-
-    const origLoopPoints = app.loopPoints.bind(app);
-    app.loopPoints = () => (_abLoop ? { first: _abLoop.first, last: _abLoop.last } : origLoopPoints());
-
-    if (opts.playBtn) {
-      app.playback.setPlaybackBtn(opts.playBtn);
-      opts.playBtn.addEventListener("click", () => {
-        void app.playback.toggle();
-        setTimeout(() => {
-          if (app.playback.busy) startPlaybackScrollGuard(opts.scorePane);
-        }, 30);
-      });
-    }
-    if (opts.stopBtn) {
-      app.playback.setStopBtn(opts.stopBtn);
-      opts.stopBtn.addEventListener("click", () => cleanupSustainCursor(opts.scorePane));
-    }
-    if (opts.progressEl) {
-      app.playback.bindProgress(opts.progressEl, opts.timeEl ?? null);
-      opts.progressEl.addEventListener("input", () => cleanupSustainCursor(opts.scorePane));
-    }
-    if (opts.speedSel) {
-      app.playback.bindSpeedSelect(opts.speedSel);
-      opts.speedSel.addEventListener("change", () => cleanupSustainCursor(opts.scorePane));
-    }
-
-    preserveIconButton(opts.loopBtn);
-    preserveIconButton(opts.metroBtn);
-    app.playback.bindToggles(opts.loopBtn ?? null, opts.metroBtn ?? null);
-
-    if (opts.viewBtns) {
-      for (const [mode, btn] of opts.viewBtns) {
-        btn.addEventListener("click", async () => {
-          cleanupSustainCursor(opts.scorePane);
-          clearAbLoop(false);
-          await app.setViewMode(mode);
-          hideDiagnosticOverlays(opts.scorePane);
-          app.visual.afterRebuild();
-        });
-      }
-      if (opts.viewSwitch) app.setViewModeButtons(opts.viewSwitch, opts.viewBtns);
-    }
-
-    opts.editToggleBtn?.addEventListener("click", () => {
-      if (_editMode) {
-        void cancelEditMode();
-      } else {
-        enterEditMode();
-      }
-    });
-    opts.editSaveBtn?.addEventListener("click", () => commitEditMode());
-    opts.editDiscardBtn?.addEventListener("click", () => void cancelEditMode());
-
-    attachPinchZoom(opts.scorePane, {
-      get: () => app.zoom,
-      set: (z) => app.setZoom(z),
-      pages: () => opts.scorePane.querySelectorAll(".score-page-wrap"),
-      onChange: () => _onZoomChange?.(app.zoom),
-    });
-    _onZoomChange?.(app.zoom);
-    wireDirectScoreSelection(opts.scorePane);
-    notifyRange();
-
-    let diagScheduled = false;
-    const paneObserver = new MutationObserver((mutations) => {
-      let hasNewPageOrSvg = false;
-      for (const m of mutations) {
-        for (const node of m.addedNodes) {
-          if (!(node instanceof Element)) continue;
-          if (
-            node.classList.contains("score-page-wrap") ||
-            node.tagName.toLowerCase() === "svg" ||
-            node.querySelector(".score-page-wrap, svg")
-          ) {
-            hasNewPageOrSvg = true;
-            break;
-          }
-        }
-        if (hasNewPageOrSvg) break;
-      }
-
-      if (hasNewPageOrSvg && !diagScheduled) {
-        diagScheduled = true;
-        requestAnimationFrame(() => {
-          diagScheduled = false;
-          hideDiagnosticOverlays(opts.scorePane);
-        });
-      }
-      if (app.playback.busy && !_playbackGuardRaf) {
-        startPlaybackScrollGuard(opts.scorePane);
-      }
-    });
-    paneObserver.observe(opts.scorePane, { childList: true, subtree: true });
-
-    scheduleBackgroundPreload();
-
-    _app = app;
-    return app;
-  })();
-
-  return _appPromise;
-}
-
-async function recognizeAndRender(
-  filesInput: File | readonly File[],
-  opts: {
-    kind?: OmrKind;
-    onProgress?: (ratio: number | null) => void;
-    onFirstPageReady?: () => void;
-  } = {},
-): Promise<{ engine: string; info: string }> {
-  if (!_app) throw new Error("請先初始化引擎");
-  const files = Array.isArray(filesInput) ? [...filesInput] : [filesInput as File];
-  if (!files.length) throw new Error("未選擇任何檔案");
-
-  const myGen = ++_loadGen;
-  if (_editMode) await cancelEditMode();
-  cleanupSustainCursor(_scorePane);
-  clearAbLoop(true);
-  _app.stopPlayback();
-  _app.clearPages();
-
-  const kind: OmrKind = opts.kind ?? "auto";
-  const onProgress = opts.onProgress ?? (() => undefined);
-  const first = files[0]!;
-  const firstName = first.name.toLowerCase();
-
-  onProgress(null);
-
-  // 單一非圖片/PDF 譜檔直接由官方解析渲染
-  if (files.length === 1 && !firstName.endsWith(".pdf") && !/\.(png|jpe?g|webp)$/i.test(firstName)) {
-    onProgress(0.45);
-    const bytes = new Uint8Array(await first.arrayBuffer());
-    _app.importBytes(bytes, first.name);
-    onProgress(0.8);
-    await _app.whenIdle();
-    if (/\.(xml|musicxml)$/i.test(firstName) && _app.mode === "jp") {
-      await _app.setViewMode("staff");
-    }
-    if (_app.pageEls.length === 0) {
-      throw new Error(_app.status || "無法解析此樂譜檔案");
-    }
-    if (_scorePane) hideDiagnosticOverlays(_scorePane);
-    _app.visual.afterRebuild();
-    onProgress(1);
-    return { engine: "native-doc", info: "" };
-  }
-
-  let xml = "";
-  let engine = "";
-
-  // 1. 單一 PDF 矢量 / 轉曲五線譜
-  if (files.length === 1 && kind !== "jianpu") {
-    const firstBytes = new Uint8Array(await first.arrayBuffer());
-    if (isPdf(firstBytes, first.type || undefined)) {
-      onProgress(0.15);
-      const sb = await import("./staffomr/browser");
-      let pdfDoc: Awaited<ReturnType<typeof sb.openStaffPdf>> | null = null;
-      try {
-        pdfDoc = await sb.openStaffPdf(firstBytes);
-      } catch {
-        pdfDoc = null;
-      }
-      if (pdfDoc) {
+<!DOCTYPE html>
+<html lang="zh-Hant" class="sl-html">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SCORE LAB · 樂譜工坊</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;600;700&display=swap" rel="stylesheet" crossorigin="anonymous" />
+  <link rel="modulepreload" href="/src/scorelab-omr.ts" />
+  <script>
+    // ==========================================
+    // 0. 模型 / WASM / 字型 永久快取與啟動預載機制
+    // ==========================================
+    (() => {
+      const CACHE_NAME = 'scorelab-model-cache-v1';
+      const IDB_NAME = 'scorelab_model_blob_db';
+      const IDB_STORE = 'assets';
+      const PRELOAD_LS = 'scorelab_preload_urls_v1';
+      const MAX_PRELOAD_URLS = 40;
+
+      const origFetch = window.fetch.bind(window);
+      const inflight = new Map();
+      const memPending = new Set();
+
+      function normalizeUrl(input) {
         try {
-          if (await sb.isStaffPdf(pdfDoc.pdf, pdfDoc.OPS)) {
-            const res = await sb.recognizeStaffPdf(pdfDoc, {
-              onProgress: (d, t) => onProgress(0.2 + 0.72 * (d / Math.max(1, t))),
-              noteIds: false,
+          const raw = typeof input === 'string'
+            ? input
+            : (input instanceof URL ? input.href : (input && input.url ? input.url : ''));
+          if (!raw) return null;
+          const u = new URL(raw, location.href);
+          if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+          return u;
+        } catch {
+          return null;
+        }
+      }
+
+      function isCacheableModelOrAsset(u) {
+        if (!u) return false;
+        if (u.origin !== location.origin && u.protocol !== 'https:') return false;
+        const p = u.pathname.toLowerCase();
+        if (
+          p.endsWith('.ts') || p.endsWith('.tsx') || p.endsWith('.js') ||
+          p.endsWith('.mjs') || p.endsWith('.css') || p.endsWith('.html')
+        ) {
+          return false;
+        }
+        if (p.includes('/@vite') || p.includes('/@fs') || p.includes('/node_modules/.vite')) {
+          return false;
+        }
+        if (/\.(onnx|ort|wasm|bin|pb|tflite|weights|model|data|woff2?|otf|traineddata)$/.test(p)) {
+          return true;
+        }
+        if (/\/(models?|onnx|ort|wasm|omr|redist|smufl)\//.test(p) && /\.(json|txt|dat|map)$/.test(p)) {
+          return true;
+        }
+        return false;
+      }
+
+      function hasRangeHeader(input, init) {
+        try {
+          if (init && init.headers) {
+            const h = new Headers(init.headers);
+            if (h.has('range')) return true;
+          }
+          if (input instanceof Request && input.headers.has('range')) return true;
+        } catch {}
+        return false;
+      }
+
+      function readPreloadManifest() {
+        try {
+          const raw = localStorage.getItem(PRELOAD_LS);
+          const arr = raw ? JSON.parse(raw) : [];
+          return Array.isArray(arr) ? arr.filter((x) => typeof x === 'string') : [];
+        } catch {
+          return [];
+        }
+      }
+
+      function rememberPreloadUrl(urlHref) {
+        try {
+          const list = readPreloadManifest();
+          if (!list.includes(urlHref)) {
+            list.push(urlHref);
+            if (list.length > MAX_PRELOAD_URLS) list.splice(0, list.length - MAX_PRELOAD_URLS);
+            localStorage.setItem(PRELOAD_LS, JSON.stringify(list));
+          }
+        } catch {}
+      }
+
+      let idbPromise = null;
+      function openAssetDB() {
+        if (idbPromise) return idbPromise;
+        if (!('indexedDB' in window)) return Promise.resolve(null);
+        idbPromise = new Promise((resolve) => {
+          try {
+            const req = indexedDB.open(IDB_NAME, 1);
+            req.onupgradeneeded = () => {
+              const db = req.result;
+              if (!db.objectStoreNames.contains(IDB_STORE)) {
+                db.createObjectStore(IDB_STORE, { keyPath: 'url' });
+              }
+            };
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => resolve(null);
+          } catch {
+            resolve(null);
+          }
+        });
+        return idbPromise;
+      }
+
+      async function getFromStore(urlHref) {
+        if ('caches' in window) {
+          try {
+            const cache = await caches.open(CACHE_NAME);
+            const hit = await cache.match(urlHref);
+            if (hit) return hit;
+          } catch {}
+        }
+        try {
+          const db = await openAssetDB();
+          if (!db) return null;
+          return await new Promise((resolve) => {
+            const tx = db.transaction(IDB_STORE, 'readonly');
+            const req = tx.objectStore(IDB_STORE).get(urlHref);
+            req.onsuccess = () => {
+              const rec = req.result;
+              if (!rec || !rec.body) { resolve(null); return; }
+              try {
+                resolve(new Response(rec.body, {
+                  status: rec.status || 200,
+                  statusText: rec.statusText || 'OK',
+                  headers: rec.headers || [],
+                }));
+              } catch {
+                resolve(null);
+              }
+            };
+            req.onerror = () => resolve(null);
+          });
+        } catch {
+          return null;
+        }
+      }
+
+      async function putIntoStore(urlHref, responseClone) {
+        rememberPreloadUrl(urlHref);
+        if ('caches' in window) {
+          try {
+            const cache = await caches.open(CACHE_NAME);
+            await cache.put(urlHref, responseClone);
+            return;
+          } catch {}
+        }
+        try {
+          const db = await openAssetDB();
+          if (!db) return;
+          const buf = await responseClone.arrayBuffer();
+          const headers = [];
+          responseClone.headers.forEach((v, k) => headers.push([k, v]));
+          await new Promise((resolve) => {
+            const tx = db.transaction(IDB_STORE, 'readwrite');
+            tx.objectStore(IDB_STORE).put({
+              url: urlHref,
+              status: responseClone.status || 200,
+              statusText: responseClone.statusText || 'OK',
+              headers,
+              body: buf,
+              savedAt: Date.now(),
             });
-            if (myGen !== _loadGen) return { engine: "cancelled", info: "" };
-            if (res.notes > 0 && res.musicxml) {
-              xml = res.musicxml;
-              engine = "vector-staff";
-            }
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => resolve();
+          });
+        } catch {}
+      }
+
+      async function fetchWithPersistentCache(input, init, urlHref) {
+        const cached = await getFromStore(urlHref);
+        if (cached) {
+          rememberPreloadUrl(urlHref);
+          return cached;
+        }
+
+        if (inflight.has(urlHref)) {
+          const shared = await inflight.get(urlHref);
+          return shared.clone();
+        }
+
+        const p = (async () => {
+          const resp = await origFetch(input, init);
+          if (resp && resp.ok && resp.status === 200 && !resp.bodyUsed) {
+            try {
+              const copy = resp.clone();
+              void putIntoStore(urlHref, copy);
+            } catch {}
+          }
+          return resp;
+        })();
+
+        inflight.set(urlHref, p);
+        try {
+          const res = await p;
+          return res.clone();
+        } finally {
+          inflight.delete(urlHref);
+        }
+      }
+
+      window.fetch = function (input, init) {
+        const method = (
+          (init && init.method) ||
+          (input instanceof Request ? input.method : 'GET')
+        ).toUpperCase();
+        const u = normalizeUrl(input);
+
+        if (method === 'GET' && u && isCacheableModelOrAsset(u) && !hasRangeHeader(input, init)) {
+          return fetchWithPersistentCache(input, init, u.href);
+        }
+        return origFetch(input, init);
+      };
+
+      async function warmUrl(urlHref) {
+        if (memPending.has(urlHref)) return;
+        memPending.add(urlHref);
+        try {
+          const hit = await getFromStore(urlHref);
+          if (hit) return;
+          const resp = await origFetch(urlHref, { cache: 'force-cache' });
+          if (resp && resp.ok && resp.status === 200 && !resp.bodyUsed) {
+            await putIntoStore(urlHref, resp.clone());
+          }
+        } catch {}
+      }
+
+      function injectPreloadLink(urlHref) {
+        try {
+          const p = new URL(urlHref).pathname.toLowerCase();
+          const link = document.createElement('link');
+          link.rel = 'preload';
+          link.href = urlHref;
+          if (/\.(woff2?|otf)$/.test(p)) {
+            link.as = 'font';
+            link.crossOrigin = 'anonymous';
           } else {
-            const ob = await import("./outlineomr/browser");
-            if (await ob.isOutlinedStaffPdf(pdfDoc.pdf, pdfDoc.OPS)) {
-              const res = await ob.recognizeOutlinedPdf(pdfDoc, {
-                onProgress: (d, t) => onProgress(0.2 + 0.72 * (d / Math.max(1, t))),
-                noteIds: false,
-              });
-              if (myGen !== _loadGen) return { engine: "cancelled", info: "" };
-              if (res.notes > 0 && res.musicxml) {
-                xml = res.musicxml;
-                engine = "outlined-staff";
+            link.as = 'fetch';
+            link.crossOrigin = 'anonymous';
+          }
+          document.head.appendChild(link);
+        } catch {}
+      }
+
+      const knownUrls = readPreloadManifest();
+      for (const u of knownUrls) {
+        const parsed = normalizeUrl(u);
+        if (parsed && isCacheableModelOrAsset(parsed)) {
+          injectPreloadLink(parsed.href);
+          void warmUrl(parsed.href);
+        }
+      }
+
+      if ('PerformanceObserver' in window) {
+        try {
+          const po = new PerformanceObserver((list) => {
+            for (const entry of list.getEntries()) {
+              const u = normalizeUrl(entry.name);
+              if (u && isCacheableModelOrAsset(u)) {
+                rememberPreloadUrl(u.href);
+                void warmUrl(u.href);
+              }
+            }
+          });
+          po.observe({ type: 'resource', buffered: true });
+        } catch {}
+      }
+
+      window.__scorelabPreload = {
+        warmUrl,
+        listCached: readPreloadManifest,
+      };
+    })();
+  </script>
+  <script type="module" src="/src/scorelab-omr.ts"></script>
+  <style>
+    /* 無印良品 × 莫蘭迪日式色系（使用獨立 --sl-* 變數避免被官方 styles.css 覆蓋） */
+    :root {
+      --sl-bg: #f5f2ec;
+      --sl-surface: #faf8f4;
+      --sl-surface-2: #efece4;
+      --sl-line: #ddd7cc;
+      --sl-line-hi: #c4bcb0;
+      --sl-text: #2f2d2a;
+      --sl-muted: #7a746b;
+
+      --sl-sage: #5b7a62;
+      --sl-sage-bg: #e9efe9;
+      --sl-slate: #596e82;
+      --sl-slate-bg: #e9eef2;
+      --sl-clay: #947460;
+      --sl-clay-bg: #f2ece7;
+      --sl-rose: #b86b6b;
+      --sl-rose-bg: #f5e9e9;
+      --sl-amber: #b88b4a;
+      --sl-amber-bg: #f5efe3;
+      --sl-coral: #b35c5c;
+      --sl-coral-bg: #f6eaea;
+
+      --sl-serif: "Noto Serif TC", "PingFang TC", "Microsoft JhengHei", serif;
+    }
+
+    #sl-app, #sl-app * { box-sizing: border-box; }
+
+    html.sl-html, body.sl-body {
+      margin: 0 !important;
+      height: auto !important;
+      min-height: 100vh !important;
+      overflow-x: hidden !important;
+      overflow-y: auto !important;
+      background: var(--sl-bg) !important;
+      color: var(--sl-text) !important;
+      font-family: var(--sl-serif) !important;
+      font-variant-numeric: tabular-nums;
+      -webkit-font-smoothing: antialiased;
+    }
+    body.sl-body { padding: 18px 14px 64px !important; }
+
+    #sl-app button, #sl-app select, #sl-app input {
+      font-family: var(--sl-serif);
+      margin: 0;
+    }
+
+    #sl-app.sl-app { max-width: 1080px; margin: 0 auto; }
+
+    /* Topbar */
+    #sl-app .topbar {
+      display: flex; justify-content: space-between; align-items: center;
+      flex-wrap: wrap; gap: 12px; padding-bottom: 14px;
+      border-bottom: 1px solid var(--sl-line); margin-bottom: 16px;
+    }
+    #sl-app .brand { display: flex; align-items: center; gap: 10px; }
+    #sl-app .brand-sq { width: 10px; height: 10px; border-radius: 2px; background: var(--sl-sage); flex-shrink: 0; }
+    #sl-app .brand h1 { margin: 0; font-size: 1.02rem; letter-spacing: 0.18em; font-weight: 700; color: var(--sl-text); }
+    #sl-app .top-actions { display: flex; align-items: center; gap: 8px; }
+
+    #sl-app .mono-tag {
+      font-size: 0.76rem; color: var(--sl-muted); background: var(--sl-surface);
+      border: 1px solid var(--sl-line); border-radius: 6px; padding: 0 9px;
+      height: 30px; display: inline-flex; align-items: center; white-space: nowrap; flex-shrink: 0;
+    }
+
+    #sl-app .tabs {
+      display: inline-flex; align-items: center; gap: 3px; background: var(--sl-surface-2);
+      border: 1px solid var(--sl-line); border-radius: 8px; padding: 3px;
+    }
+    #sl-app .tab-btn {
+      border: none; background: transparent; color: var(--sl-muted);
+      padding: 0 14px; height: 28px; font-size: 0.84rem; font-weight: 600; cursor: pointer;
+      border-radius: 6px; transition: background 0.15s, color 0.15s;
+      display: inline-flex; align-items: center; justify-content: center; white-space: nowrap;
+    }
+    #sl-app .tab-btn.active {
+      background: var(--sl-surface); color: var(--sl-text);
+      box-shadow: 0 1px 3px rgba(47, 45, 42, 0.1);
+    }
+
+    /* Panels */
+    #sl-app .panel {
+      background: var(--sl-surface); border: 1px solid var(--sl-line);
+      border-radius: 10px; padding: 16px; margin-bottom: 14px;
+      box-shadow: 0 2px 10px rgba(47, 45, 42, 0.03);
+    }
+    #sl-app .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+    #sl-app .row-nowrap { display: inline-flex; flex-wrap: nowrap; align-items: center; gap: 6px; }
+    #sl-app .between { justify-content: space-between; }
+
+    /* Controls */
+    #sl-app .ctrl-pill {
+      display: inline-flex; align-items: center; gap: 8px; height: 32px;
+      background: var(--sl-surface-2); border: 1px solid var(--sl-line);
+      border-radius: 6px; padding: 0 10px; font-size: 0.8rem; color: var(--sl-text);
+    }
+    #sl-app input[type="range"] { width: 80px; accent-color: var(--sl-sage); cursor: pointer; }
+    #sl-app select {
+      background: var(--sl-surface); color: var(--sl-text); border: 1px solid var(--sl-line-hi);
+      border-radius: 6px; padding: 0 10px; height: 32px; font-size: 0.82rem; font-weight: 600;
+      outline: none; cursor: pointer; vertical-align: middle; flex-shrink: 0;
+    }
+
+    #sl-app .toggle {
+      display: inline-flex; align-items: center; gap: 6px; height: 32px;
+      background: var(--sl-surface-2); border: 1px solid var(--sl-line); border-radius: 6px;
+      padding: 0 10px; font-size: 0.8rem; font-weight: 600; color: var(--sl-muted);
+      cursor: pointer; user-select: none; white-space: nowrap;
+    }
+    #sl-app .toggle input { display: none; }
+    #sl-app .toggle .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--sl-line-hi); }
+    #sl-app .toggle.on { color: var(--sl-sage); border-color: var(--sl-sage); background: var(--sl-sage-bg); }
+    #sl-app .toggle.on .dot { background: var(--sl-sage); }
+
+    /* 按鍵（統一高度與幾何對齊，防止外部樣式破壞） */
+    #sl-app .btn {
+      border: 1px solid var(--sl-line-hi); background: var(--sl-surface); color: var(--sl-text);
+      padding: 0 13px; height: 32px; line-height: 1; font-size: 0.82rem; font-weight: 600; cursor: pointer;
+      display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+      border-radius: 6px; transition: all 0.15s ease; white-space: nowrap; flex-shrink: 0; vertical-align: middle;
+    }
+    #sl-app .btn:hover:not(:disabled) { filter: brightness(0.96); }
+    #sl-app .btn:disabled { opacity: 0.38; cursor: not-allowed; }
+    #sl-app .btn-xs { padding: 0 11px; height: 30px; font-size: 0.78rem; }
+    #sl-app .btn-primary { background: var(--sl-sage); color: #fff; border-color: var(--sl-sage); }
+
+    /* 純 SVG 圖示按鍵 */
+    #sl-app .btn-icon {
+      padding: 0 !important; width: 32px; min-width: 32px; height: 32px;
+      display: inline-flex; align-items: center; justify-content: center;
+    }
+    #sl-app .btn-icon.btn-xs { width: 28px; min-width: 28px; height: 28px; }
+    #sl-app .btn-icon svg { width: 16px; height: 16px; display: block; pointer-events: none; flex-shrink: 0; }
+
+    /* 工具列三行視覺分區 */
+    #sl-app .toolbar-stack { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+    #sl-app .toolbar-row {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+      padding: 8px 12px; border-radius: 8px; border: 1px solid var(--sl-line);
+    }
+
+    /* Row 1: 播放列（莫蘭迪鼠尾草綠） */
+    #sl-app .row-play { background: var(--sl-sage-bg); border-color: #cedad0; }
+    #sl-app .row-play .btn { border-color: #b7cbb9; color: #3a523f; background: #f8fbf8; height: 32px; }
+    #sl-app .row-play .btn-play-main { background: var(--sl-sage); color: #fff; border-color: var(--sl-sage); }
+    #sl-app .row-play .btn.active { background: var(--sl-sage); color: #fff; border-color: var(--sl-sage); }
+    #sl-app .row-play .btn-range.picking { background: var(--sl-amber); color: #fff; border-color: var(--sl-amber); }
+    #sl-app .row-play .btn-range.picking.has-start { background: var(--sl-clay); color: #fff; border-color: var(--sl-clay); }
+    #sl-app .row-play .btn-range-clear { border-color: #d9bbbb; color: var(--sl-coral); background: #fdf9f9; }
+    #sl-app .row-play select { border-color: #b7cbb9; color: #3a523f; background: #f8fbf8; height: 32px; }
+    #sl-app .row-play .mono-tag { background: #f8fbf8; border-color: #b7cbb9; color: #3a523f; height: 32px; }
+    #sl-app .progress-wrap { display: inline-flex; align-items: center; gap: 8px; flex: 1 1 200px; min-width: 180px; }
+    #sl-app .progress-wrap input[type="range"] { flex: 1; min-width: 80px; height: 20px; }
+
+    /* Row 2: 譜面視圖列（莫蘭迪霧霾藍 + 右側修譜開關） */
+    #sl-app .row-view { background: var(--sl-slate-bg); border-color: #ced7e0; justify-content: space-between; }
+    #sl-app .row-view .btn { border-color: #b7c4d1; color: #3b4b5c; background: #f7fafc; height: 30px; }
+    #sl-app .row-view .btn.active { background: var(--sl-slate); color: #fff; border-color: var(--sl-slate); }
+    #sl-app .row-view .btn-edit-mode { border-color: #d7c3a0; color: #73552a; background: #fcf9f2; }
+    #sl-app .row-view .btn-edit-mode.active { background: var(--sl-amber); color: #fff; border-color: var(--sl-amber); }
+    #sl-app .btn-edit-mode svg { width: 13px; height: 13px; display: block; flex-shrink: 0; }
+
+    /* 修譜工具面板（展開式，莫蘭迪暖麥色） */
+    #sl-app .edit-panel {
+      margin-bottom: 10px; padding: 10px 12px; border-radius: 8px;
+      background: var(--sl-amber-bg); border: 1px solid #dfd0b8;
+      display: flex; flex-direction: column; gap: 8px;
+    }
+    #sl-app .edit-bar {
+      display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px;
+    }
+    #sl-app .edit-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+    #sl-app .edit-badge {
+      font-size: 0.74rem; font-weight: 700; padding: 0 9px; height: 26px;
+      border-radius: 5px; display: inline-flex; align-items: center;
+      background: var(--sl-surface); border: 1px solid #d7c3a0; color: #6a4d22;
+      white-space: nowrap;
+    }
+    #sl-app .edit-beat-count {
+      font-size: 0.74rem; font-weight: 700; padding: 0 9px; height: 26px;
+      border-radius: 5px; display: inline-flex; align-items: center;
+      background: var(--sl-coral-bg); border: 1px solid #dfc3c3; color: var(--sl-coral);
+      cursor: pointer; white-space: nowrap;
+    }
+    #sl-app .edit-status {
+      font-size: 0.75rem; color: var(--sl-clay); font-weight: 600;
+    }
+    #sl-app .edit-status:empty { display: none; }
+    #sl-app .edit-panel .btn-xs {
+      height: 26px; padding: 0 10px; font-size: 0.74rem;
+      border-color: #d7c3a0; color: #6a4d22; background: var(--sl-surface);
+    }
+    #sl-app .edit-panel .btn-xs.active {
+      background: var(--sl-amber); color: #fff; border-color: var(--sl-amber);
+    }
+    #sl-app #visual-palette {
+      background: var(--sl-surface); border: 1px solid var(--sl-line);
+      border-radius: 6px; padding: 6px 8px;
+      display: flex; flex-wrap: wrap; gap: 4px; align-items: center;
+      max-height: 170px; overflow-y: auto;
+    }
+    #sl-app #visual-palette button {
+      min-height: 28px; padding: 2px 7px; border-radius: 5px;
+      border: 1px solid var(--sl-line-hi); background: var(--sl-surface-2);
+      color: var(--sl-text); font-size: 0.76rem; font-weight: 600; cursor: pointer;
+    }
+    #sl-app #visual-palette button:hover:not(:disabled) { background: var(--sl-sage-bg); border-color: var(--sl-sage); }
+    #sl-app #visual-palette button:disabled { opacity: 0.35; cursor: not-allowed; }
+
+    /* Row 3: 頁面與匯出、收藏工具列（莫蘭迪暖陶米） */
+    #sl-app .row-tools { background: var(--sl-clay-bg); border-color: #ded2c8; justify-content: space-between; }
+    #sl-app .row-tools .btn { border-color: #cbbab0; color: #5e4739; background: #fbf9f7; height: 32px; }
+    #sl-app .row-tools .btn-export { background: var(--sl-clay); color: #fff; border-color: var(--sl-clay); }
+
+    #sl-app .btn-fav { border-color: #d9bbbb !important; color: var(--sl-rose) !important; background: #fdf9f9 !important; }
+    #sl-app .btn-fav.fav-saved { background: var(--sl-rose) !important; color: #fff !important; border-color: var(--sl-rose) !important; }
+    #sl-app .btn-fav-top.fav-open { background: var(--sl-rose-bg) !important; border-color: var(--sl-rose) !important; }
+
+    #sl-app .playback-icon { display: inline-flex; align-items: center; width: 10px; height: 10px; flex-shrink: 0; }
+    #sl-app .playback-icon svg { width: 10px; height: 10px; display: block; }
+
+    #sl-app .cat-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--sl-line); }
+    #sl-app .cat-pill {
+      border: 1px solid var(--sl-line); background: var(--sl-surface-2); color: var(--sl-muted);
+      border-radius: 6px; padding: 0 10px; height: 28px; font-size: 0.76rem; font-weight: 600; cursor: pointer;
+      display: inline-flex; align-items: center; justify-content: center;
+    }
+    #sl-app .cat-pill.active { border-color: var(--sl-sage); color: var(--sl-sage); background: var(--sl-sage-bg); }
+
+    /* Beat Matrix */
+    #sl-app .beat-strip { display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 12px; }
+    #sl-app .beat-status { font-size: 0.78rem; color: var(--sl-muted); min-width: 48px; text-align: right; font-weight: 600; }
+    #sl-app .leds { display: flex; gap: 6px; }
+    #sl-app .led { width: 26px; height: 4px; border-radius: 2px; background: var(--sl-line); }
+    #sl-app .led.countin { background: var(--sl-amber); }
+    #sl-app .led.playing { background: var(--sl-sage); }
+
+    /* Quiz / Library */
+    #sl-app .grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+    @media (max-width: 680px) { #sl-app .grid-2 { grid-template-columns: 1fr; } }
+
+    #sl-app .pad {
+      position: relative; background: var(--sl-surface-2); border: 1px solid var(--sl-line); border-radius: 8px;
+      padding: 22px 12px 14px; min-height: 110px; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; cursor: pointer; overflow-x: auto;
+    }
+    #sl-app .pad:hover:not(.locked) { border-color: var(--sl-sage); }
+    #sl-app .pad.correct { border-color: var(--sl-sage); background: var(--sl-sage-bg); }
+    #sl-app .pad.wrong { border-color: var(--sl-coral); background: var(--sl-coral-bg); }
+    #sl-app .pad.dimmed { opacity: 0.45; }
+    #sl-app .pad-idx { position: absolute; top: 8px; left: 10px; font-size: 0.72rem; color: var(--sl-muted); font-weight: 700; }
+    #sl-app .pad-meta { margin-top: 8px; display: flex; align-items: center; gap: 8px; font-size: 0.8rem; color: var(--sl-text); font-weight: 600; }
+
+    #sl-app .result-strip {
+      margin-top: 12px; padding: 10px 14px; border-radius: 8px; display: none;
+      align-items: center; justify-content: space-between; font-size: 0.84rem; font-weight: 600; border: 1px solid transparent;
+    }
+    #sl-app .result-strip.show { display: flex; }
+    #sl-app .result-strip.ok { background: var(--sl-sage-bg); border-color: var(--sl-sage); color: var(--sl-sage); }
+    #sl-app .result-strip.err { background: var(--sl-coral-bg); border-color: var(--sl-coral); color: var(--sl-coral); }
+
+    #sl-app .lib-card { background: var(--sl-surface-2); border: 1px solid var(--sl-line); border-radius: 8px; padding: 12px; cursor: pointer; overflow-x: auto; }
+    #sl-app .playing-card { border-color: var(--sl-sage) !important; box-shadow: inset 0 0 0 1px var(--sl-sage); }
+    #sl-app .card-top { display: flex; justify-content: space-between; align-items: center; gap: 6px; margin-bottom: 4px; color: var(--sl-text); }
+    #sl-app .tag { font-size: 0.7rem; padding: 2px 7px; border-radius: 4px; border: 1px solid var(--sl-line); color: var(--sl-muted); background: var(--sl-surface); white-space: nowrap; }
+    #sl-app .tag-sync { color: var(--sl-amber); border-color: #dfd0b8; }
+    #sl-app .tag-dot { color: var(--sl-slate); border-color: #c9d4de; }
+    #sl-app .tag-16 { color: var(--sl-clay); border-color: #dfd0c4; }
+    #sl-app .tag-off { color: var(--sl-coral); border-color: #dfc3c3; }
+
+    /* Dropzone */
+    #sl-app .dropzone {
+      border: 1.5px dashed var(--sl-line-hi); border-radius: 10px; padding: 18px 14px;
+      text-align: center; cursor: pointer; display: flex; flex-direction: column;
+      align-items: center; gap: 10px; background: var(--sl-surface-2); transition: border-color 0.15s, background 0.15s;
+    }
+    #sl-app .dropzone:hover, #sl-app .dropzone.dragover { border-color: var(--sl-sage); background: var(--sl-sage-bg); }
+    #sl-app .dropzone.processing {
+      border-color: var(--sl-sage);
+      animation: sl-dz-pulse 1.8s ease-in-out infinite;
+    }
+    @keyframes sl-dz-pulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(91, 122, 98, 0.18); }
+      50% { box-shadow: 0 0 0 5px rgba(91, 122, 98, 0.08); }
+    }
+    #sl-app .dropzone-title { font-weight: 700; font-size: 0.94rem; letter-spacing: 0.08em; color: var(--sl-text); }
+
+    /* 純視覺化進度指示與錯誤提示 */
+    #sl-app .omr-status-bar {
+      margin-top: 10px; padding: 10px 14px; border-radius: 8px;
+      background: var(--sl-surface-2); border: 1px solid var(--sl-line);
+      min-height: 38px;
+      display: flex; justify-content: space-between; align-items: center; gap: 12px;
+    }
+    #sl-app .omr-status-bar.err {
+      color: var(--sl-coral); border-color: #dfc3c3; background: var(--sl-coral-bg);
+      font-size: 0.8rem;
+    }
+    #sl-app .omr-visual-loader {
+      display: flex; align-items: center; gap: 12px; width: 100%;
+    }
+    #sl-app .omr-wave {
+      display: inline-flex; align-items: center; gap: 3px; height: 18px; flex-shrink: 0;
+    }
+    #sl-app .omr-wave i {
+      display: block; width: 3px; height: 6px; border-radius: 2px;
+      background: var(--sl-sage); font-style: normal;
+      animation: sl-wave-bar 1.05s ease-in-out infinite;
+    }
+    #sl-app .omr-wave i:nth-child(2) { animation-delay: 0.14s; }
+    #sl-app .omr-wave i:nth-child(3) { animation-delay: 0.28s; }
+    #sl-app .omr-wave i:nth-child(4) { animation-delay: 0.42s; }
+    #sl-app .omr-wave i:nth-child(5) { animation-delay: 0.56s; }
+    @keyframes sl-wave-bar {
+      0%, 100% { height: 5px; opacity: 0.4; }
+      50% { height: 17px; opacity: 1; }
+    }
+    #sl-app .omr-track {
+      position: relative; flex: 1; height: 6px; border-radius: 999px;
+      background: var(--sl-line); overflow: hidden;
+    }
+    #sl-app .omr-fill {
+      position: absolute; top: 0; bottom: 0; left: 0; width: 0%;
+      border-radius: 999px;
+      background: linear-gradient(90deg, var(--sl-sage), #7a9a81, var(--sl-sage));
+      background-size: 200% 100%;
+      transition: width 0.35s cubic-bezier(0.22, 1, 0.36, 1);
+      animation: sl-fill-shimmer 1.6s linear infinite;
+    }
+    #sl-app .omr-track.indeterminate .omr-fill {
+      width: 34% !important;
+      transition: none;
+      animation: sl-indeterminate 1.35s ease-in-out infinite, sl-fill-shimmer 1.6s linear infinite;
+    }
+    @keyframes sl-fill-shimmer {
+      0% { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+    @keyframes sl-indeterminate {
+      0% { left: -36%; }
+      100% { left: 102%; }
+    }
+
+    /* 多頁順序確認面板（精準單行對齊排版） */
+    #sl-app .queue-panel {
+      margin-top: 12px; padding: 14px; border-radius: 8px;
+      background: var(--sl-amber-bg); border: 1px solid #dfd0b8;
+    }
+    #sl-app .queue-grid {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(172px, 1fr)); gap: 10px; margin: 12px 0 4px;
+    }
+    #sl-app .queue-item {
+      background: var(--sl-surface); border: 1px solid var(--sl-line-hi); border-radius: 8px; padding: 8px;
+      display: flex; flex-direction: column; gap: 8px; cursor: grab; user-select: none; min-width: 0;
+    }
+    #sl-app .queue-item.dragging { opacity: 0.45; border-color: var(--sl-sage); }
+    #sl-app .queue-thumb {
+      width: 100%; height: 150px; object-fit: contain; background: #fff;
+      border: 1px solid var(--sl-line); border-radius: 4px; display: block;
+    }
+    #sl-app .queue-foot {
+      display: flex; justify-content: space-between; align-items: center; gap: 6px; flex-wrap: nowrap;
+    }
+    #sl-app .queue-badge {
+      font-size: 0.72rem; font-weight: 700; color: var(--sl-muted);
+      background: var(--sl-surface-2); border: 1px solid var(--sl-line);
+      border-radius: 5px; padding: 0 7px; height: 26px;
+      display: inline-flex; align-items: center; justify-content: center;
+      white-space: nowrap; flex-shrink: 0;
+    }
+    #sl-app .queue-actions {
+      display: inline-flex; align-items: center; gap: 4px; flex-wrap: nowrap; flex-shrink: 0;
+    }
+    #sl-app .queue-btn {
+      width: 26px; min-width: 26px; height: 26px; padding: 0 !important;
+      border: 1px solid var(--sl-line-hi); background: var(--sl-surface); color: var(--sl-text);
+      border-radius: 5px; display: inline-flex; align-items: center; justify-content: center; cursor: pointer;
+    }
+    #sl-app .queue-btn:hover:not(:disabled) { background: var(--sl-surface-2); }
+    #sl-app .queue-btn:disabled { opacity: 0.32; cursor: not-allowed; }
+    #sl-app .queue-btn svg { width: 13px; height: 13px; display: block; pointer-events: none; }
+    #sl-app .queue-btn-del { color: var(--sl-coral); border-color: #dfc3c3; background: #fdf9f9; }
+
+    /* 我的最愛面板 */
+    #sl-app .fav-panel {
+      margin-top: 12px; padding: 14px; border-radius: 8px;
+      background: var(--sl-rose-bg); border: 1px solid #e2cbcb;
+    }
+    #sl-app .fav-grid {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; margin-top: 10px;
+    }
+    #sl-app .fav-card {
+      background: var(--sl-surface); border: 1px solid var(--sl-line); border-radius: 8px; padding: 10px 12px;
+      display: flex; justify-content: space-between; align-items: center; gap: 8px; cursor: pointer; color: var(--sl-text);
+    }
+    #sl-app .fav-card:hover { border-color: var(--sl-rose); }
+    #sl-app .fav-card.current { border-color: var(--sl-sage); background: var(--sl-sage-bg); }
+    #sl-app .fav-info { min-width: 0; flex: 1; }
+    #sl-app .fav-title { font-size: 0.84rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #sl-app .fav-sub { font-size: 0.72rem; color: var(--sl-muted); margin-top: 3px; }
+
+    /* 官方譜面畫布盒 */
+    #sl-app .sl-score-box {
+      height: 72vh; min-height: 420px; display: flex; flex-direction: column;
+      border: 1px solid var(--sl-line); border-radius: 8px; background: #e8e3d9; overflow: hidden;
+    }
+    #sl-app #score-pane {
+      flex: 1; min-height: 0; overflow: auto; padding: 16px; background: #e8e3d9;
+      user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+      -webkit-tap-highlight-color: transparent;
+      outline: none;
+    }
+    #sl-app #score-pane.sl-picking {
+      cursor: crosshair;
+      touch-action: none;
+    }
+
+    /* 測驗/圖鑑 五線譜 SVG & 簡譜 */
+    #sl-app .staff-quiz-svg { width: 100%; max-width: 310px; height: auto; display: block; color: var(--sl-text); }
+    #sl-app .s-ev { transition: color 0.05s, transform 0.05s; }
+    #sl-app .s-ev.active-note { color: var(--sl-sage); }
+
+    #sl-app .jianpu-bar {
+      display: inline-flex; align-items: center; flex-wrap: nowrap; gap: 12px;
+      font-family: var(--sl-serif); font-size: 21px; font-weight: 700; color: var(--sl-text);
+      padding: 26px 5px 34px; user-select: none;
+    }
+    #sl-app .jianpu-bar::before, #sl-app .jianpu-bar::after {
+      content: ""; display: inline-block; width: 2px; height: 17px; background: var(--sl-line-hi); align-self: center; flex-shrink: 0;
+    }
+    #sl-app .j-group-tight { display: inline-flex; align-items: center; gap: 4px; }
+    #sl-app .u1 { display: inline-flex; align-items: center; gap: 5px; border-bottom: 2px solid var(--sl-text); padding-bottom: 2px; }
+    #sl-app .u2-inner { display: inline-flex; align-items: center; gap: 4px; border-bottom: 2px solid var(--sl-text); padding-bottom: 2px; }
+    #sl-app .j-ev { position: relative; display: inline-flex; align-items: center; line-height: 1.05; transition: color 0.05s, transform 0.05s; }
+    #sl-app .j-ev.j-rest { color: var(--sl-muted); }
+    #sl-app .j-ev.active-note, #sl-app .j-ev .active-note { color: var(--sl-sage) !important; transform: translateY(-2px) scale(1.18); display: inline-block; }
+    #sl-app .j-dash { font-weight: 700; margin-left: 3px; color: var(--sl-muted); font-size: 0.88em; transition: color 0.05s, transform 0.05s; }
+    #sl-app .j-dot { font-weight: 900; margin-left: 1px; }
+    #sl-app .triplet { position: relative; display: inline-flex; align-items: center; }
+    #sl-app .triplet::before { content: "3"; position: absolute; top: -18px; left: 50%; transform: translateX(-50%); font-size: 10px; font-weight: 700; color: var(--sl-slate); line-height: 1; }
+    #sl-app .triplet::after { content: ""; position: absolute; top: -7px; left: 1px; right: 1px; height: 4px; border-top: 1.5px solid var(--sl-slate); border-left: 1.5px solid var(--sl-slate); border-right: 1.5px solid var(--sl-slate); pointer-events: none; }
+
+    /* 響應式斷點 */
+    @media (max-width: 768px) {
+      body.sl-body { padding: 10px 8px 48px !important; }
+      #sl-app .panel { padding: 12px; }
+      #sl-app .toolbar-row { padding: 8px 10px; gap: 6px; }
+      #sl-app .sl-score-box { height: 64vh; min-height: 360px; }
+      #sl-app #score-pane { padding: 10px; }
+      #sl-app .queue-grid { grid-template-columns: repeat(auto-fill, minmax(152px, 1fr)); }
+    }
+    @media (max-width: 480px) {
+      #sl-app .brand h1 { font-size: 0.9rem; letter-spacing: 0.12em; }
+      #sl-app .tab-btn { padding: 0 10px; font-size: 0.78rem; }
+      #sl-app .progress-wrap { min-width: 100%; order: 10; }
+      #sl-app .queue-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+      #sl-app .queue-thumb { height: 124px; }
+    }
+
+    #sl-app .hidden { display: none !important; }
+  </style>
+</head>
+<body class="sl-body">
+  <div id="sl-app" class="sl-app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-sq"></span>
+        <h1>SCORE LAB</h1>
+      </div>
+
+      <div class="top-actions">
+        <!-- 純 SVG 我的最愛清單按鍵 -->
+        <button class="btn btn-icon btn-fav btn-fav-top" id="myBtnFavList" type="button" title="我的最愛" aria-label="我的最愛">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
+            <path d="M12 13.5l-2.6-2.4a1.6 1.6 0 0 1 2.2-2.3L12 9.2l.4-.4a1.6 1.6 0 0 1 2.2 2.3L12 13.5z" fill="currentColor" stroke="none"/>
+          </svg>
+        </button>
+
+        <nav class="tabs">
+          <button class="tab-btn active" data-tab="analyzer">樂譜</button>
+          <button class="tab-btn" data-tab="quiz">測驗</button>
+          <button class="tab-btn" data-tab="library">圖鑑</button>
+        </nav>
+      </div>
+    </header>
+
+    <!-- 測驗 / 圖鑑控制列 -->
+    <section id="transportPanel" class="panel hidden">
+      <div class="row between">
+        <div class="row">
+          <div class="ctrl-pill">
+            <span id="bpmVal" style="color:var(--sl-sage); font-weight:700;">92</span>
+            <span>拍速</span>
+            <input type="range" id="bpmRange" min="45" max="180" value="92" />
+          </div>
+          <select id="soundSelect">
+            <option value="pluck">鋼琴</option>
+            <option value="synth">合成器</option>
+            <option value="wood">木魚</option>
+          </select>
+          <select id="symbolSelect" title="記譜方式">
+            <option value="staff">五線譜</option>
+            <option value="1">簡譜</option>
+            <option value="X">節奏</option>
+          </select>
+        </div>
+
+        <div class="row">
+          <label class="toggle on"><input type="checkbox" id="chkCountIn" checked /><span class="dot"></span>預拍</label>
+          <label class="toggle on"><input type="checkbox" id="chkMetro" checked /><span class="dot"></span>節拍</label>
+        </div>
+      </div>
+      <div class="cat-row" id="catBar"></div>
+    </section>
+
+    <!-- 測驗 / 圖鑑節拍燈 -->
+    <div id="beatStrip" class="beat-strip hidden">
+      <span class="beat-status" id="beatStatus">就緒</span>
+      <div class="leds" id="beatDots">
+        <div class="led"></div><div class="led"></div><div class="led"></div><div class="led"></div>
+      </div>
+    </div>
+
+    <!-- 1. 樂譜區 -->
+    <section id="analyzerSection" class="panel">
+      <div class="dropzone" id="dropzone">
+        <div class="dropzone-title">匯入樂譜</div>
+        <div class="row-nowrap">
+          <select id="omrKindSelect" title="辨識類型">
+            <option value="auto">自動</option>
+            <option value="staff">五線譜</option>
+            <option value="jianpu">簡譜</option>
+          </select>
+          <!-- 純 SVG 選擇檔案按鍵 -->
+          <button class="btn btn-primary btn-icon" id="btnPickFile" type="button" title="選擇檔案" aria-label="選擇檔案">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/>
+              <line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+          </button>
+        </div>
+        <input type="file" id="scoreInput" multiple accept=".pdf,.png,.jpg,.jpeg,.webp,.xml,.musicxml,.abc,.123,.jcx,.jly,.jpwabc,.txt,.mid,.midi" class="hidden" />
+      </div>
+
+      <!-- 多張圖片先後順序確認 -->
+      <div id="multiQueuePanel" class="queue-panel hidden">
+        <div class="row between">
+          <span style="font-size:0.86rem; font-weight:700; color:var(--sl-text);">確認頁面順序</span>
+          <div class="row-nowrap">
+            <button class="btn btn-primary btn-xs" id="btnConfirmOrder" type="button">開始辨識</button>
+            <button class="btn btn-xs" id="btnCancelOrder" type="button">取消</button>
+          </div>
+        </div>
+        <div class="queue-grid" id="multiQueueGrid"></div>
+      </div>
+
+      <!-- 我的最愛面板 -->
+      <div id="favPanel" class="fav-panel hidden">
+        <div class="row between">
+          <span style="font-size:0.86rem; font-weight:700; color:var(--sl-rose);">我的最愛</span>
+          <button class="btn btn-xs" id="btnCloseFav" type="button">關閉</button>
+        </div>
+        <div id="favEmptyHint" style="font-size:0.78rem; color:var(--sl-muted); margin-top:8px;">尚未收藏樂譜</div>
+        <div class="fav-grid" id="favGrid"></div>
+      </div>
+
+      <!-- 純視覺化進度指示（無文字）與錯誤重試 -->
+      <div id="omrStatusBox" class="omr-status-bar hidden" aria-label="處理中">
+        <div id="omrVisualLoader" class="omr-visual-loader">
+          <span class="omr-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+          <div id="omrTrack" class="omr-track indeterminate">
+            <div id="omrFill" class="omr-fill"></div>
+          </div>
+        </div>
+        <span id="omrStatusText" class="hidden"></span>
+        <button class="btn btn-xs hidden" id="btnRetryOmr" type="button">重新辨識</button>
+      </div>
+
+      <!-- 樂譜主輸出區：三行色彩分組工具列 + 可展開修譜面板 + 官方動態譜面 -->
+      <div id="analyzerOutput" class="hidden" style="margin-top:14px;">
+        <div class="toolbar-stack">
+          <!-- 第 1 行：播放與純 SVG 控制列（莫蘭迪鼠尾草綠） -->
+          <div class="toolbar-row row-play">
+            <div class="row-nowrap">
+              <button class="btn btn-xs btn-play-main" id="myBtnPlay" type="button">
+                <span class="playback-icon"></span>
+                <span class="playback-label">播放</span>
+              </button>
+              <button class="btn btn-xs" id="myBtnStop" type="button">停止</button>
+            </div>
+            <div class="progress-wrap">
+              <input type="range" id="myProgress" />
+              <span class="mono-tag" id="myTime">0:00 / 0:00</span>
+            </div>
+            <div class="row-nowrap">
+              <select id="mySpeed"></select>
+              <!-- 循環（純 SVG） -->
+              <button class="btn btn-icon" id="myBtnLoop" type="button" title="循環" aria-label="循環">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="17 1 21 5 17 9"/>
+                  <path d="M3 11V9a4 4 0 0 1 4-4h14"/>
+                  <polyline points="7 23 3 19 7 15"/>
+                  <path d="M21 13v2a4 4 0 0 1-4 4H3"/>
+                </svg>
+              </button>
+              <!-- 節拍（純 SVG） -->
+              <button class="btn btn-icon" id="myBtnMetro" type="button" title="節拍" aria-label="節拍">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M7 20h10l-2.5-15h-5L7 20z"/>
+                  <line x1="12" y1="16" x2="18" y2="6"/>
+                  <circle cx="16.2" cy="8.8" r="1.4" fill="currentColor" stroke="none"/>
+                  <line x1="5" y1="20" x2="19" y2="20"/>
+                </svg>
+              </button>
+              <!-- 選段（純 SVG：長按起點拖曳至終點） -->
+              <button class="btn btn-icon btn-range" id="myBtnRangeMode" type="button" title="選段：於樂譜長按起點拖曳至終點（或點擊此鍵後直接拖曳）" aria-label="選段">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M8 4H5v16h3"/>
+                  <path d="M16 4h3v16h-3"/>
+                  <line x1="9" y1="12" x2="15" y2="12"/>
+                  <circle cx="9" cy="12" r="1.6" fill="currentColor" stroke="none"/>
+                  <circle cx="15" cy="12" r="1.6" fill="currentColor" stroke="none"/>
+                </svg>
+              </button>
+              <!-- 清除選段（純 SVG） -->
+              <button class="btn btn-icon btn-range-clear hidden" id="myBtnRangeClear" type="button" title="清除選段" aria-label="清除選段">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M7 4H4v16h3"/>
+                  <path d="M17 4h3v16h-3"/>
+                  <line x1="9.5" y1="9.5" x2="14.5" y2="14.5"/>
+                  <line x1="14.5" y1="9.5" x2="9.5" y2="14.5"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <!-- 第 2 行：譜面視圖（莫蘭迪霧霾藍）＋ 右側修譜模式開關 -->
+          <div class="toolbar-row row-view" id="myViewSwitch">
+            <div class="row-nowrap">
+              <button class="btn btn-xs" id="myViewStaff" type="button">五線譜</button>
+              <button class="btn btn-xs" id="myViewMixed" type="button">混排</button>
+              <button class="btn btn-xs" id="myViewExpanded" type="button">簡譜</button>
+            </div>
+            <button class="btn btn-xs btn-edit-mode" id="myBtnEditMode" type="button" aria-pressed="false" title="點譜面音符直接手動修改音高或拍子">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 20h9"/>
+                <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/>
+              </svg>
+              <span>修譜</span>
+            </button>
+          </div>
+
+          <!-- 第 3 行：頁面與匯出、收藏工具（莫蘭迪暖陶米 + 純 SVG 按鍵） -->
+          <div class="toolbar-row row-tools">
+            <div class="row-nowrap">
+              <!-- 縮小 SVG -->
+              <button class="btn btn-icon" id="myBtnZoomOut" type="button" title="縮小" aria-label="縮小">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="11" cy="11" r="7"/>
+                  <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                  <line x1="8" y1="11" x2="14" y2="11"/>
+                </svg>
+              </button>
+              <button class="btn btn-xs" id="myBtnZoomReset" type="button">100%</button>
+              <!-- 放大 SVG -->
+              <button class="btn btn-icon" id="myBtnZoomIn" type="button" title="放大" aria-label="放大">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="11" cy="11" r="7"/>
+                  <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                  <line x1="11" y1="8" x2="11" y2="14"/>
+                  <line x1="8" y1="11" x2="14" y2="11"/>
+                </svg>
+              </button>
+              <!-- 上一頁 SVG -->
+              <button class="btn btn-icon" id="myBtnPrevPage" type="button" title="上一頁" aria-label="上一頁">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="15 18 9 12 15 6"/>
+                </svg>
+              </button>
+              <!-- 下一頁 SVG -->
+              <button class="btn btn-icon" id="myBtnNextPage" type="button" title="下一頁" aria-label="下一頁">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="9 18 15 12 9 6"/>
+                </svg>
+              </button>
+            </div>
+            <div class="row-nowrap">
+              <!-- 匯出樂譜 SVG -->
+              <button class="btn btn-icon btn-export" id="myBtnExportXml" type="button" title="匯出樂譜" aria-label="匯出樂譜">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                  <polyline points="7 10 12 15 17 10"/>
+                  <line x1="12" y1="15" x2="12" y2="3"/>
+                </svg>
+              </button>
+              <!-- 我的最愛 SVG -->
+              <button class="btn btn-icon btn-fav" id="myBtnFavToggle" type="button" title="加入我的最愛" aria-label="加入我的最愛">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 可展開修譜面板（點「修譜」才顯示，掛載原版 VisualEditController 面板與拍數檢查） -->
+        <div id="editPanel" class="edit-panel hidden">
+          <div class="edit-bar">
+            <div class="edit-meta">
+              <span id="visual-mode" class="edit-badge" hidden></span>
+              <span id="sel-info" class="edit-badge" hidden></span>
+              <span id="beat-count" class="edit-beat-count" hidden title="點擊跳至下一處拍數異常小節"></span>
+              <span id="editStatusText" class="edit-status"></span>
+            </div>
+            <div class="row-nowrap">
+              <button class="btn btn-xs" id="btn-beat-check" type="button" title="顯示拍數檢查紅框">對拍</button>
+              <button class="btn btn-xs" id="btn-format-marks" type="button" title="顯示換行與換頁記號">換行</button>
+              <button class="btn btn-xs" id="btn-palette" type="button" title="收合/展開修譜按鈕面板">面板</button>
+            </div>
+          </div>
+          <div id="visual-palette" hidden></div>
+        </div>
+
+        <div class="sl-score-box">
+          <div id="score-pane"></div>
+        </div>
+        <div id="code-pane-hidden" style="display:none;"></div>
+      </div>
+    </section>
+
+    <!-- 2. 測驗 -->
+    <section id="quizSection" class="panel hidden">
+      <div class="row between" style="margin-bottom:12px;">
+        <div class="row">
+          <button class="btn btn-primary" id="btnPlayQuestion">播放</button>
+          <button class="btn" id="btnStopAudio">停止</button>
+          <button class="btn" id="btnNextQuestion">換題</button>
+        </div>
+        <div class="row">
+          <span class="mono-tag">答對 <b id="statCorrect">0</b>/<b id="statTotal">0</b></span>
+          <span class="mono-tag">連勝 <b id="statStreak">0</b></span>
+        </div>
+      </div>
+      <div class="grid-2" id="optionsGrid"></div>
+      <div class="result-strip" id="feedbackBanner">
+        <span id="feedbackText"></span>
+        <button class="btn btn-primary btn-xs" id="btnBannerNext">下一題</button>
+      </div>
+    </section>
+
+    <!-- 3. 圖鑑 -->
+    <section id="librarySection" class="panel hidden">
+      <div class="row between" style="margin-bottom:12px;">
+        <span class="mono-tag">節奏圖鑑</span>
+        <button class="btn btn-xs" id="btnLibStop">停止</button>
+      </div>
+      <div class="grid-2" id="libraryList"></div>
+    </section>
+  </div>
+
+  <script>
+    // ==========================================
+    // 1. IndexedDB + localStorage 持久化設定與最愛
+    // ==========================================
+    const FAV_DB_NAME = 'scorelab_favorites_db';
+    const FAV_STORE = 'scores';
+    const FAV_META_LS = 'scorelab_favorites_meta_v1';
+    const NOTATION_LS = 'scorelab_quiz_notation_v1';
+    const VIEW_LABEL = { staff: '五線譜', mixed: '混排', expanded: '簡譜', original: '簡譜' };
+
+    const RANGE_SVG_IDLE = `
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M8 4H5v16h3"/>
+        <path d="M16 4h3v16h-3"/>
+        <line x1="9" y1="12" x2="15" y2="12"/>
+        <circle cx="9" cy="12" r="1.6" fill="currentColor" stroke="none"/>
+        <circle cx="15" cy="12" r="1.6" fill="currentColor" stroke="none"/>
+      </svg>`;
+    const RANGE_SVG_DRAG = `
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M8 4H5v16h3"/>
+        <path d="M16 4h3v16h-3"/>
+        <line x1="8" y1="12" x2="16" y2="12"/>
+        <polyline points="13 9 16 12 13 15"/>
+      </svg>`;
+
+    // 載入記譜偏好（預設為五線譜）
+    try {
+      const savedNotation = localStorage.getItem(NOTATION_LS);
+      const sel = document.getElementById('symbolSelect');
+      if (savedNotation && ['staff', '1', 'X'].includes(savedNotation)) {
+        sel.value = savedNotation;
+      } else {
+        sel.value = 'staff';
+      }
+    } catch {}
+
+    function openFavDB() {
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open(FAV_DB_NAME, 1);
+        req.onupgradeneeded = () => {
+          const db = req.result;
+          if (!db.objectStoreNames.contains(FAV_STORE)) {
+            db.createObjectStore(FAV_STORE, { keyPath: 'id' });
+          }
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    async function getAllFavorites() {
+      const db = await openFavDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(FAV_STORE, 'readonly');
+        const req = tx.objectStore(FAV_STORE).getAll();
+        req.onsuccess = () => {
+          const list = (req.result || []).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+          try {
+            localStorage.setItem(FAV_META_LS, JSON.stringify(list.map(x => ({ id: x.id, hash: x.hash, title: x.title, viewMode: x.viewMode, createdAt: x.createdAt }))));
+          } catch {}
+          resolve(list);
+        };
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    async function putFavorite(record) {
+      const db = await openFavDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(FAV_STORE, 'readwrite');
+        tx.objectStore(FAV_STORE).put(record);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    }
+
+    async function deleteFavorite(id) {
+      const db = await openFavDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(FAV_STORE, 'readwrite');
+        tx.objectStore(FAV_STORE).delete(id);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    }
+
+    function hashSnapshot(format, text) {
+      let h = 2166136261;
+      const str = `${format}:${text}`;
+      for (let i = 0; i < str.length; i++) {
+        h ^= str.charCodeAt(i);
+        h = Math.imul(h, 16777619);
+      }
+      return `${format}:${str.length}:${(h >>> 0).toString(36)}`;
+    }
+
+    let currentFavHash = null;
+
+    async function syncFavToggleButton() {
+      const btn = document.getElementById('myBtnFavToggle');
+      const snap = window.__dolceEngine?.getSnapshot();
+      if (!snap) {
+        currentFavHash = null;
+        btn.classList.remove('fav-saved');
+        btn.querySelector('path').setAttribute('fill', 'none');
+        return;
+      }
+      currentFavHash = hashSnapshot(snap.format, snap.text);
+      const list = await getAllFavorites();
+      const hit = list.some(x => x.hash === currentFavHash);
+      btn.classList.toggle('fav-saved', hit);
+      btn.querySelector('path').setAttribute('fill', hit ? 'currentColor' : 'none');
+    }
+
+    async function renderFavoritesPanel() {
+      const list = await getAllFavorites();
+      const grid = document.getElementById('favGrid');
+      const empty = document.getElementById('favEmptyHint');
+      grid.innerHTML = '';
+      empty.classList.toggle('hidden', list.length > 0);
+
+      list.forEach(item => {
+        const card = document.createElement('div');
+        card.className = 'fav-card' + (item.hash === currentFavHash ? ' current' : '');
+
+        const info = document.createElement('div');
+        info.className = 'fav-info';
+        const d = new Date(item.createdAt || Date.now());
+        const dt = `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+        info.innerHTML = `<div class="fav-title"></div><div class="fav-sub">${VIEW_LABEL[item.viewMode] || '樂譜'} · ${dt}</div>`;
+        info.querySelector('.fav-title').textContent = item.title || '已儲存樂譜';
+
+        const actions = document.createElement('div');
+        actions.className = 'row-nowrap';
+
+        const btnRename = document.createElement('button');
+        btnRename.type = 'button';
+        btnRename.className = 'btn btn-xs btn-icon';
+        btnRename.title = '重新命名';
+        btnRename.setAttribute('aria-label', '重新命名');
+        btnRename.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>`;
+        btnRename.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const next = prompt('修改樂譜名稱：', item.title || '已儲存樂譜');
+          if (next && next.trim()) {
+            item.title = next.trim();
+            await putFavorite(item);
+            await renderFavoritesPanel();
+          }
+        });
+
+        const btnDel = document.createElement('button');
+        btnDel.type = 'button';
+        btnDel.className = 'btn btn-xs btn-icon';
+        btnDel.title = '移除';
+        btnDel.setAttribute('aria-label', '移除');
+        btnDel.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M6 6l1 14h10l1-14"/></svg>`;
+        btnDel.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          await deleteFavorite(item.id);
+          await syncFavToggleButton();
+          await renderFavoritesPanel();
+        });
+
+        actions.append(btnRename, btnDel);
+        card.append(info, actions);
+
+        card.addEventListener('click', async () => {
+          hideOmrStatus();
+          try {
+            const eng = await ensureDolceEngine();
+            await eng.loadSnapshot(item);
+            document.getElementById('analyzerOutput').classList.remove('hidden');
+            document.getElementById('favPanel').classList.add('hidden');
+            document.getElementById('myBtnFavList').classList.remove('fav-open');
+            await syncFavToggleButton();
+            await renderFavoritesPanel();
+          } catch (err) {
+            console.error(err);
+            setOmrError(`載入失敗：${err?.message || err}`);
+          }
+        });
+
+        grid.appendChild(card);
+      });
+    }
+
+    // ==========================================
+    // 2. 樂譜區：多頁順序確認 & 純視覺進度辨識
+    // ==========================================
+    let lastOmrFiles = [];
+    let pendingQueue = [];
+    let dragIndex = -1;
+    let enginePromise = null;
+
+    function hideOmrStatus() {
+      document.getElementById('dropzone').classList.remove('processing');
+      document.getElementById('omrStatusBox').classList.add('hidden');
+      document.getElementById('omrStatusText').classList.add('hidden');
+      document.getElementById('btnRetryOmr').classList.add('hidden');
+    }
+
+    function setOmrProgress(ratio = null) {
+      const dz = document.getElementById('dropzone');
+      const box = document.getElementById('omrStatusBox');
+      const loader = document.getElementById('omrVisualLoader');
+      const track = document.getElementById('omrTrack');
+      const fill = document.getElementById('omrFill');
+      const txt = document.getElementById('omrStatusText');
+      const retry = document.getElementById('btnRetryOmr');
+
+      dz.classList.add('processing');
+      box.className = 'omr-status-bar';
+      loader.classList.remove('hidden');
+      txt.textContent = '';
+      txt.classList.add('hidden');
+      retry.classList.add('hidden');
+
+      if (typeof ratio === 'number' && Number.isFinite(ratio)) {
+        const pct = Math.max(6, Math.min(100, Math.round(ratio * 100)));
+        track.classList.remove('indeterminate');
+        fill.style.width = `${pct}%`;
+      } else {
+        track.classList.add('indeterminate');
+      }
+    }
+
+    function setOmrError(msg) {
+      const dz = document.getElementById('dropzone');
+      const box = document.getElementById('omrStatusBox');
+      const loader = document.getElementById('omrVisualLoader');
+      const txt = document.getElementById('omrStatusText');
+      const retry = document.getElementById('btnRetryOmr');
+
+      dz.classList.remove('processing');
+      box.className = 'omr-status-bar err';
+      loader.classList.add('hidden');
+      txt.textContent = msg;
+      txt.classList.remove('hidden');
+
+      const isOmr = lastOmrFiles.length > 0 && lastOmrFiles.every(f => /\.(pdf|png|jpe?g|webp)$/i.test(f.name) || f.type.startsWith('image/'));
+      retry.classList.toggle('hidden', !isOmr);
+    }
+
+    function clearPendingQueue() {
+      pendingQueue.forEach(item => { try { URL.revokeObjectURL(item.url); } catch {} });
+      pendingQueue = [];
+      document.getElementById('multiQueuePanel').classList.add('hidden');
+      document.getElementById('multiQueueGrid').innerHTML = '';
+    }
+
+    function renderMultiQueue() {
+      const grid = document.getElementById('multiQueueGrid');
+      grid.innerHTML = '';
+      pendingQueue.forEach((item, idx) => {
+        const card = document.createElement('div');
+        card.className = 'queue-item';
+        card.draggable = true;
+
+        card.addEventListener('dragstart', () => { dragIndex = idx; card.classList.add('dragging'); });
+        card.addEventListener('dragend', () => { dragIndex = -1; card.classList.remove('dragging'); });
+        card.addEventListener('dragover', (e) => e.preventDefault());
+        card.addEventListener('drop', (e) => {
+          e.preventDefault();
+          if (dragIndex >= 0 && dragIndex !== idx) {
+            const [moved] = pendingQueue.splice(dragIndex, 1);
+            pendingQueue.splice(idx, 0, moved);
+            renderMultiQueue();
+          }
+        });
+
+        const img = document.createElement('img');
+        img.className = 'queue-thumb';
+        img.src = item.url;
+        img.alt = `第 ${idx + 1} 頁`;
+
+        const foot = document.createElement('div');
+        foot.className = 'queue-foot';
+
+        const badge = document.createElement('span');
+        badge.className = 'queue-badge';
+        badge.textContent = `第 ${idx + 1} 頁`;
+
+        const btns = document.createElement('div');
+        btns.className = 'queue-actions';
+
+        const up = document.createElement('button');
+        up.type = 'button'; up.className = 'queue-btn'; up.disabled = idx === 0;
+        up.title = '往前移一頁'; up.setAttribute('aria-label', '往前移一頁');
+        up.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>`;
+        up.addEventListener('click', () => {
+          [pendingQueue[idx - 1], pendingQueue[idx]] = [pendingQueue[idx], pendingQueue[idx - 1]];
+          renderMultiQueue();
+        });
+
+        const down = document.createElement('button');
+        down.type = 'button'; down.className = 'queue-btn'; down.disabled = idx === pendingQueue.length - 1;
+        down.title = '往後移一頁'; down.setAttribute('aria-label', '往後移一頁');
+        down.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>`;
+        down.addEventListener('click', () => {
+          [pendingQueue[idx + 1], pendingQueue[idx]] = [pendingQueue[idx], pendingQueue[idx + 1]];
+          renderMultiQueue();
+        });
+
+        const del = document.createElement('button');
+        del.type = 'button'; del.className = 'queue-btn queue-btn-del';
+        del.title = '移除此頁'; del.setAttribute('aria-label', '移除此頁');
+        del.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
+        del.addEventListener('click', () => {
+          const [removed] = pendingQueue.splice(idx, 1);
+          try { URL.revokeObjectURL(removed.url); } catch {}
+          if (pendingQueue.length === 0) clearPendingQueue();
+          else renderMultiQueue();
+        });
+
+        btns.append(up, down, del);
+        foot.append(badge, btns);
+        card.append(img, foot);
+        grid.appendChild(card);
+      });
+    }
+
+    function handlePickedFiles(fileList) {
+      const files = [...fileList];
+      if (!files.length) return;
+      if (files.length === 1) {
+        clearPendingQueue();
+        void loadScoreFiles([files[0]]);
+        return;
+      }
+      const images = files
+        .filter(f => /\.(png|jpe?g|webp)$/i.test(f.name) || f.type.startsWith('image/'))
+        .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+      if (images.length === 0) {
+        clearPendingQueue();
+        void loadScoreFiles([files[0]]);
+        return;
+      }
+      if (images.length === 1) {
+        clearPendingQueue();
+        void loadScoreFiles([images[0]]);
+        return;
+      }
+      clearPendingQueue();
+      pendingQueue = images.map(file => ({ file, url: URL.createObjectURL(file) }));
+      document.getElementById('multiQueuePanel').classList.remove('hidden');
+      renderMultiQueue();
+    }
+
+    function ensureDolceEngine() {
+      if (enginePromise) return enginePromise;
+      enginePromise = (async () => {
+        if (!window.__dolceEngine) {
+          await new Promise((resolve) => window.addEventListener('dolce-engine-ready', resolve, { once: true }));
+        }
+        const scorePane = document.getElementById('score-pane');
+        const zoomBtn = document.getElementById('myBtnZoomReset');
+        const rangeBtn = document.getElementById('myBtnRangeMode');
+        const clearBtn = document.getElementById('myBtnRangeClear');
+        const viewBtns = new Map([
+          ['staff', document.getElementById('myViewStaff')],
+          ['mixed', document.getElementById('myViewMixed')],
+          ['expanded', document.getElementById('myViewExpanded')],
+        ]);
+        await window.__dolceEngine.mount({
+          scorePane,
+          hiddenCodePane: document.getElementById('code-pane-hidden'),
+          statusEl: document.getElementById('editStatusText'),
+          playBtn: document.getElementById('myBtnPlay'),
+          stopBtn: document.getElementById('myBtnStop'),
+          progressEl: document.getElementById('myProgress'),
+          timeEl: document.getElementById('myTime'),
+          speedSel: document.getElementById('mySpeed'),
+          loopBtn: document.getElementById('myBtnLoop'),
+          metroBtn: document.getElementById('myBtnMetro'),
+          viewSwitch: document.getElementById('myViewSwitch'),
+          viewBtns,
+          editToggleBtn: document.getElementById('myBtnEditMode'),
+          editPanel: document.getElementById('editPanel'),
+          visualEls: {
+            mode: document.getElementById('visual-mode'),
+            selInfo: document.getElementById('sel-info'),
+            marksBtn: document.getElementById('btn-format-marks'),
+            beatBtn: document.getElementById('btn-beat-check'),
+            beatCount: document.getElementById('beat-count'),
+            palette: document.getElementById('visual-palette'),
+            paletteBtn: document.getElementById('btn-palette'),
+          },
+          onZoomChange: (z) => {
+            if (zoomBtn) zoomBtn.textContent = `${Math.round(z * 100)}%`;
+          },
+          onRangeChange: ({ active, picking, hasStart }) => {
+            scorePane.classList.toggle('sl-picking', picking);
+            rangeBtn.classList.toggle('picking', picking);
+            rangeBtn.classList.toggle('has-start', picking && hasStart);
+            rangeBtn.classList.toggle('active', active && !picking);
+            if (picking) {
+              rangeBtn.innerHTML = RANGE_SVG_DRAG;
+              const label = hasStart ? '拖曳至終點音符後放開即可完成選段' : '請於樂譜按住起點並拖曳至終點';
+              rangeBtn.title = label;
+              rangeBtn.setAttribute('aria-label', label);
+            } else {
+              rangeBtn.innerHTML = RANGE_SVG_IDLE;
+              const label = active
+                ? '選段反覆中（長按起點拖曳或點此鍵重新選段）'
+                : '選段：長按起點拖曳至終點（或點擊此鍵後直接拖曳）';
+              rangeBtn.title = label;
+              rangeBtn.setAttribute('aria-label', label);
+            }
+            clearBtn.classList.toggle('hidden', !active && !hasStart);
+          },
+        });
+        return window.__dolceEngine;
+      })();
+      return enginePromise;
+    }
+
+    async function loadScoreFiles(files) {
+      lastOmrFiles = [...files];
+      const first = files[0];
+      const name = first.name.toLowerCase();
+      document.getElementById('analyzerOutput').classList.add('hidden');
+      setOmrProgress(null);
+      try {
+        const eng = await ensureDolceEngine();
+
+        if (files.length === 1 && (name.endsWith('.mid') || name.endsWith('.midi'))) {
+          setOmrProgress(0.45);
+          const buf = await first.arrayBuffer();
+          const parsed = parseMIDI(buf);
+          const xml = exportScoreToMusicXML(parsed.trackViews[0].bars, parsed.bpm || 100);
+          setOmrProgress(0.85);
+          await eng.loadXmlText(xml, 'mixed');
+          document.getElementById('analyzerOutput').classList.remove('hidden');
+          await syncFavToggleButton();
+          hideOmrStatus();
+          return;
+        }
+
+        const kind = document.getElementById('omrKindSelect').value;
+        const res = await eng.loadFiles(files, {
+          kind,
+          onProgress: (ratio) => setOmrProgress(ratio),
+          onFirstPageReady: () => {
+            document.getElementById('analyzerOutput').classList.remove('hidden');
+          },
+        });
+        if (res.engine === 'cancelled') return;
+        document.getElementById('analyzerOutput').classList.remove('hidden');
+        await syncFavToggleButton();
+        hideOmrStatus();
+      } catch (err) {
+        console.error(err);
+        document.getElementById('analyzerOutput').classList.add('hidden');
+        setOmrError(`辨識失敗：${err?.message || err}`);
+      }
+    }
+
+    // MIDI -> MusicXML
+    function parseMIDI(arrayBuffer) {
+      const dv = new DataView(arrayBuffer); let pos = 0;
+      const readStr = (len) => { let s = ''; for (let i = 0; i < len; i++) s += String.fromCharCode(dv.getUint8(pos++)); return s; };
+      const readVLQ = () => {
+        let val = 0;
+        while (pos < dv.byteLength) { const b = dv.getUint8(pos++); val = (val << 7) | (b & 0x7f); if ((b & 0x80) === 0) break; }
+        return val;
+      };
+      if (readStr(4) !== 'MThd') throw new Error('無效的 MIDI 格式');
+      const hdrLen = dv.getUint32(pos); pos += 4; pos += 2;
+      const numTracks = dv.getUint16(pos); pos += 2;
+      const division = dv.getUint16(pos); pos += 2;
+      if (hdrLen > 6) pos += (hdrLen - 6);
+
+      const tempoMap = [{ tick: 0, bpm: 100 }], timeSigMap = [{ tick: 0, num: 4, den: 4 }], keySigMap = [{ tick: 0, sf: 0, mi: 0 }];
+      const rawTracks = [];
+
+      for (let t = 0; t < numTracks; t++) {
+        if (pos + 8 > dv.byteLength) break;
+        const tag = readStr(4), trkLen = dv.getUint32(pos); pos += 4;
+        const trkEnd = Math.min(dv.byteLength, pos + trkLen);
+        if (tag !== 'MTrk') { pos = trkEnd; continue; }
+        let tick = 0, runningStatus = 0;
+        const activeNotes = new Map(), notes = [];
+
+        while (pos < trkEnd) {
+          tick += readVLQ(); if (pos >= trkEnd) break;
+          let status = dv.getUint8(pos);
+          if (status < 0x80) status = runningStatus;
+          else { pos++; if (status < 0xf0) runningStatus = status; }
+
+          if (status === 0xff) {
+            const metaType = dv.getUint8(pos++), len = readVLQ();
+            if (metaType === 0x51 && len === 3) {
+              const us = (dv.getUint8(pos) << 16) | (dv.getUint8(pos + 1) << 8) | dv.getUint8(pos + 2);
+              tempoMap.push({ tick, bpm: Math.round(60000000 / us) });
+            } else if (metaType === 0x58 && len >= 2) {
+              timeSigMap.push({ tick, num: dv.getUint8(pos), den: Math.pow(2, dv.getUint8(pos + 1)) });
+            } else if (metaType === 0x59 && len >= 2) {
+              keySigMap.push({ tick, sf: dv.getInt8(pos), mi: dv.getUint8(pos + 1) });
+            }
+            pos += len;
+          } else if (status === 0xf0 || status === 0xf7) {
+            pos += readVLQ();
+          } else {
+            const type = status & 0xf0, ch = status & 0x0f, d1 = dv.getUint8(pos++);
+            const d2 = (type === 0xc0 || type === 0xd0) ? 0 : dv.getUint8(pos++);
+            if (type === 0x90 && d2 > 0) {
+              const k = (ch << 8) | d1; if (!activeNotes.has(k)) activeNotes.set(k, []); activeNotes.get(k).push(tick);
+            } else if (type === 0x80 || (type === 0x90 && d2 === 0)) {
+              const k = (ch << 8) | d1, q = activeNotes.get(k);
+              if (q && q.length > 0) {
+                const startTick = q.shift();
+                notes.push({ startTick, durTicks: Math.max(division * 0.25, tick - startTick), midi: d1 });
               }
             }
           }
-        } finally {
-          pdfDoc.pdf.destroy?.();
         }
+        pos = trkEnd;
+        if (notes.length > 0) rawTracks.push({ short: `T${rawTracks.length + 1}`, notes });
       }
-    }
-  }
+      if (rawTracks.length === 0) throw new Error('沒有偵測到音符');
+      tempoMap.sort((a, b) => a.tick - b.tick); timeSigMap.sort((a, b) => a.tick - b.tick); keySigMap.sort((a, b) => a.tick - b.tick);
+      const getAt = (arr, tick) => { let cur = arr[0]; for (const item of arr) { if (item.tick <= tick + 10) cur = item; else break; } return cur; };
 
-  // 2. 位圖五線譜（支援多張圖片：先辨識第 1 頁立即顯示，再補齊全曲）
-  if (!xml && kind !== "jianpu") {
-    onProgress(0.12);
-    const rb = await import("./rasteromr/browser");
-    const rasterPdfs: Uint8Array[] = [];
+      let maxTick = 0;
+      for (const rt of rawTracks) for (const nt of rt.notes) maxTick = Math.max(maxTick, nt.startTick + nt.durTicks);
+      const tol = division * 0.08, combinedBars = [];
+      let barTick = 0, barIdx = 0;
 
-    for (let i = 0; i < files.length; i++) {
-      if (myGen !== _loadGen) return { engine: "cancelled", info: "" };
-      const f = files[i]!;
-      onProgress(0.15 + 0.15 * ((i + 1) / files.length));
-      const isImg = /\.(png|jpe?g|webp)$/i.test(f.name) || f.type.startsWith("image/");
-      const opt = isImg ? await maybeOptimizeImage(f) : { bytes: new Uint8Array(await f.arrayBuffer()), mime: f.type || undefined };
-      rasterPdfs.push(await rb.asRasterPdf(opt.bytes, opt.mime));
-    }
-
-    if (myGen !== _loadGen) return { engine: "cancelled", info: "" };
-    onProgress(0.34);
-    const probe = kind === "staff" ? null : await rb.probeRasterStaff(rasterPdfs[0]!);
-
-    if (!probe || probe.isStaff) {
-      let showedFirst = false;
-
-      if (rasterPdfs.length > 1) {
-        onProgress(0.4);
-        const firstRes = await rb.recognizeRasterPdfs([rasterPdfs[0]!], {
-          ...(probe?.pages ? { firstPages: new Map(probe.pages) } : {}),
-          cancelled: () => myGen !== _loadGen,
+      while (barTick < maxTick && barIdx < 500) {
+        const ts = getAt(timeSigMap, barTick), ks = getAt(keySigMap, barTick);
+        const barBeats = ts.num * (4 / ts.den), barTicks = barBeats * division;
+        const voices = rawTracks.map(rt => {
+          const inBar = rt.notes
+            .filter(n => n.startTick >= barTick - tol && n.startTick < barTick + barTicks - tol)
+            .map(n => ({ start: (n.startTick - barTick) / division, dur: n.durTicks / division, midis: [n.midi] }));
+          return { label: rt.short, events: normalizePolyBarEvents(inBar, barBeats) };
         });
-        if (myGen !== _loadGen) return { engine: "cancelled", info: "" };
-        if (firstRes.xml && _app.adoptStaffXml(firstRes.xml)) {
-          await _app.setViewMode("staff");
-          await _app.whenIdle();
-          if (_app.pageEls.length > 0) {
-            if (_scorePane) hideDiagnosticOverlays(_scorePane);
-            showedFirst = true;
-            opts.onFirstPageReady?.();
+        if (voices.some(v => v.events.some(e => e.type === 'note')) || barIdx === 0) {
+          combinedBars.push({ barBeats, timeSig: `${ts.num}/${ts.den}`, keyFifths: ks.sf, voices });
+        }
+        barTick += barTicks; barIdx++;
+      }
+      const initBpm = tempoMap.find(x => x.tick === 0)?.bpm || tempoMap[1]?.bpm || 100;
+      return { bpm: initBpm, trackViews: [{ bars: combinedBars }] };
+    }
+
+    function normalizePolyBarEvents(rawNotes, barBeats) {
+      const grid16 = 0.25, gridTri = 1 / 3;
+      const quantize = (val) => {
+        const q16 = Math.round(val / grid16) * grid16, qTri = Math.round(val / gridTri) * gridTri;
+        return Math.abs(val - qTri) + 0.01 < Math.abs(val - q16) ? qTri : q16;
+      };
+      const cleaned = rawNotes
+        .map(x => ({ start: Math.max(0, quantize(x.start)), dur: Math.max(0.25, quantize(x.dur)), midis: [...x.midis] }))
+        .filter(x => x.start < barBeats - 0.05)
+        .sort((a, b) => a.start - b.start);
+      const grouped = [];
+      cleaned.forEach(item => {
+        const prev = grouped[grouped.length - 1];
+        if (prev && Math.abs(prev.start - item.start) < 0.06) {
+          item.midis.forEach(m => { if (!prev.midis.includes(m)) prev.midis.push(m); });
+          if (item.dur > prev.dur) prev.dur = item.dur;
+        } else grouped.push(item);
+      });
+      const result = [];
+      let cursor = 0;
+      const pushRests = (start, totalDur) => {
+        let cur = start, rem = totalDur;
+        while (rem > 0.06) {
+          const toBeat = Math.floor(cur + 0.02) + 1 - cur;
+          let chunk = rem;
+          if (rem > toBeat + 0.05 && Math.abs(cur - Math.floor(cur)) > 0.05) chunk = toBeat;
+          else if (chunk > 2) chunk = 2;
+          else if (chunk > 1 && chunk < 1.95) chunk = 1;
+          result.push({ start: cur, dur: chunk, type: 'rest' });
+          cur += chunk; rem -= chunk;
+        }
+      };
+      grouped.forEach(note => {
+        if (note.start > cursor + 0.06) { pushRests(cursor, note.start - cursor); cursor = note.start; }
+        const avail = Math.min(note.dur, barBeats - cursor);
+        if (avail >= 0.2) { result.push({ start: cursor, dur: avail, type: 'note', midis: note.midis }); cursor += avail; }
+      });
+      if (cursor < barBeats - 0.06) pushRests(cursor, barBeats - cursor);
+      return result;
+    }
+
+    function exportScoreToMusicXML(bars, bpm = 92) {
+      const divs = 12;
+      const sharpSpell = [['C',0],['C',1],['D',0],['D',1],['E',0],['F',0],['F',1],['G',0],['G',1],['A',0],['A',1],['B',0]];
+      const flatSpell  = [['C',0],['D',-1],['D',0],['E',-1],['E',0],['F',0],['G',-1],['G',0],['A',-1],['A',0],['B',-1],['B',0]];
+      const numVoices = Math.max(1, bars[0]?.voices?.length || 1);
+      const kf = bars[0]?.keyFifths || 0;
+      let xml = `<?xml version="1.0" encoding="UTF-8"?>\n<score-partwise version="3.1">\n  <part-list><score-part id="P1"><part-name>Score</part-name></score-part></part-list>\n  <part id="P1">\n`;
+      bars.forEach((bar, bIdx) => {
+        const [bts, btp] = (bar.timeSig || '4/4').split('/');
+        xml += `    <measure number="${bIdx + 1}">\n`;
+        if (bIdx === 0) {
+          xml += `      <attributes><divisions>${divs}</divisions><key><fifths>${kf}</fifths></key><time><beats>${bts}</beats><beat-type>${btp}</beat-type></time><staves>${numVoices > 1 ? 2 : 1}</staves></attributes>\n`;
+          xml += `      <sound tempo="${bpm}"/>\n`;
+        }
+        const barDivs = Math.round((bar.barBeats || 4) * divs);
+        (bar.voices || []).forEach((v, vIdx) => {
+          if (vIdx > 0) xml += `      <backup><duration>${barDivs}</duration></backup>\n`;
+          const staff = vIdx === 0 ? 1 : 2;
+          v.events.forEach(ev => {
+            const durDivs = Math.max(1, Math.round(ev.dur * divs));
+            if (ev.type === 'rest') {
+              xml += `      <note><rest/><duration>${durDivs}</duration><voice>${vIdx + 1}</voice><staff>${staff}</staff></note>\n`;
+            } else {
+              (ev.midis && ev.midis.length ? ev.midis : [60]).forEach((m, mi) => {
+                const oct = Math.floor(m / 12) - 1;
+                const [step, alter] = (kf < 0 ? flatSpell : sharpSpell)[((m % 12) + 12) % 12];
+                xml += `      <note>${mi > 0 ? '<chord/>' : ''}<pitch><step>${step}</step>${alter ? `<alter>${alter}</alter>` : ''}<octave>${oct}</octave></pitch><duration>${durDivs}</duration><voice>${vIdx + 1}</voice><staff>${staff}</staff></note>\n`;
+              });
+            }
+          });
+        });
+        xml += `    </measure>\n`;
+      });
+      xml += `  </part>\n</score-partwise>`;
+      return xml;
+    }
+
+    // ==========================================
+    // 3. 測驗與圖鑑（支援五線譜 / 簡譜 / 節奏）
+    // ==========================================
+    const CATEGORIES = { basic: '基礎', syncopation: '切分', sixteenth: '十六分', dotted: '附點', offbeat: '反拍' };
+    const n = (dur) => ({ t: 'n', dur });
+    const r = (dur) => ({ t: 'r', dur });
+    const half = () => ({ t: 'half', dur: 2 });
+    const dotQ = () => ({ t: 'dotQ', dur: 1.5 });
+    const dot8 = () => ({ t: 'dot8', dur: 0.75 });
+    const u1 = (...items) => ({ t: 'u1', items });
+    const u2 = (...items) => ({ t: 'u2', items });
+    const sync = (...items) => ({ t: 'sync', items });
+    const tri = () => ({ t: 'tri', items: [n(1/3), n(1/3), n(1/3)] });
+
+    const PATTERNS = [
+      { id: 'b1', cat: 'basic', name: '四分基本', groups: [n(1), n(1), n(1), n(1)] },
+      { id: 'b2', cat: 'basic', name: '二分加四分', groups: [half(), n(1), n(1)] },
+      { id: 'b3', cat: 'basic', name: '前八後四', groups: [u1(n(0.5), n(0.5)), n(1), u1(n(0.5), n(0.5)), n(1)] },
+      { id: 'b4', cat: 'basic', name: '前四後八', groups: [n(1), u1(n(0.5), n(0.5)), n(1), u1(n(0.5), n(0.5))] },
+      { id: 'b5', cat: 'basic', name: '八分加休止', groups: [u1(n(0.5), n(0.5)), u1(n(0.5), n(0.5)), n(1), r(1)] },
+      { id: 's1', cat: 'syncopation', name: '前小切分', groups: [sync(u1(n(0.5)), n(1), u1(n(0.5))), n(1), n(1)] },
+      { id: 's2', cat: 'syncopation', name: '後小切分', groups: [n(1), n(1), sync(u1(n(0.5)), n(1), u1(n(0.5)))] },
+      { id: 's3', cat: 'syncopation', name: '雙小切分', groups: [sync(u1(n(0.5)), n(1), u1(n(0.5))), sync(u1(n(0.5)), n(1), u1(n(0.5)))] },
+      { id: 's4', cat: 'syncopation', name: '置中小切分', groups: [n(1), sync(u1(n(0.5)), n(1), u1(n(0.5))), n(1)] },
+      { id: 's5', cat: 'syncopation', name: '大切分', groups: [n(1), half(), n(1)] },
+      { id: 's6', cat: 'syncopation', name: '大切分加八分', groups: [n(1), half(), u1(n(0.5), n(0.5))] },
+      { id: 'x1', cat: 'sixteenth', name: '十六分切分', groups: [n(1), u1(u2(n(0.25)), n(0.5), u2(n(0.25))), n(1), n(1)] },
+      { id: 'x2', cat: 'sixteenth', name: '雙十六分切分', groups: [u1(u2(n(0.25)), n(0.5), u2(n(0.25))), n(1), u1(u2(n(0.25)), n(0.5), u2(n(0.25))), n(1)] },
+      { id: 'x3', cat: 'sixteenth', name: '前八後十六', groups: [n(1), u1(n(0.5), u2(n(0.25), n(0.25))), n(1), u1(n(0.5), u2(n(0.25), n(0.25)))] },
+      { id: 'x4', cat: 'sixteenth', name: '前十六後八', groups: [n(1), u1(u2(n(0.25), n(0.25)), n(0.5)), n(1), u1(u2(n(0.25), n(0.25)), n(0.5))] },
+      { id: 'x5', cat: 'sixteenth', name: '十六分加切分', groups: [u1(u2(n(0.25), n(0.25), n(0.25), n(0.25))), sync(u1(n(0.5)), n(1), u1(n(0.5))), n(1)] },
+      { id: 'd1', cat: 'dotted', name: '大附點', groups: [sync(dotQ(), u1(n(0.5))), n(1), n(1)] },
+      { id: 'd2', cat: 'dotted', name: '雙大附點', groups: [sync(dotQ(), u1(n(0.5))), sync(dotQ(), u1(n(0.5)))] },
+      { id: 'd3', cat: 'dotted', name: '反大附點', groups: [sync(u1(n(0.5)), dotQ()), n(1), n(1)] },
+      { id: 'd4', cat: 'dotted', name: '小附點', groups: [n(1), u1(dot8(), u2(n(0.25))), n(1), u1(dot8(), u2(n(0.25)))] },
+      { id: 'd5', cat: 'dotted', name: '反小附點', groups: [n(1), u1(u2(n(0.25)), dot8()), n(1), u1(u2(n(0.25)), dot8())] },
+      { id: 'o1', cat: 'offbeat', name: '連續反拍', groups: [u1(r(0.5), n(0.5)), u1(r(0.5), n(0.5)), u1(r(0.5), n(0.5)), u1(r(0.5), n(0.5))] },
+      { id: 'o2', cat: 'offbeat', name: '正反交替', groups: [n(1), u1(r(0.5), n(0.5)), n(1), u1(r(0.5), n(0.5))] },
+      { id: 'o3', cat: 'offbeat', name: '反拍起手', groups: [u1(r(0.5), n(0.5)), n(1), u1(n(0.5), n(0.5)), n(1)] },
+      { id: 'o4', cat: 'offbeat', name: '三連音', groups: [n(1), tri(), n(1), n(1)] },
+      { id: 'o5', cat: 'offbeat', name: '三連加八分', groups: [tri(), u1(n(0.5), n(0.5)), tri(), n(1)] }
+    ];
+
+    function compileBuiltInJianpu(pattern, symMode = '1', barIdx = 0) {
+      const events = [];
+      let cursor = 0;
+      const ch = symMode === 'X' ? 'X' : '1';
+      function walk(tok) {
+        if (tok.t === 'n') { const idx = events.length; events.push({ start: cursor, dur: tok.dur, type: 'note', midis: [60] }); cursor += tok.dur; return `<span class="j-ev" data-bar="${barIdx}" data-v="0" data-ev="${idx}">${ch}</span>`; }
+        if (tok.t === 'r') { const idx = events.length; events.push({ start: cursor, dur: tok.dur, type: 'rest' }); cursor += tok.dur; return `<span class="j-ev j-rest" data-bar="${barIdx}" data-v="0" data-ev="${idx}">0</span>`; }
+        if (tok.t === 'half') { const idx = events.length; events.push({ start: cursor, dur: 2, type: 'note', midis: [60], hasDash: true }); cursor += 2; return `<span class="j-ev" data-bar="${barIdx}" data-v="0" data-ev="${idx}" data-half="1"><span class="j-main">${ch}</span><span class="j-dash">-</span></span>`; }
+        if (tok.t === 'dotQ') { const idx = events.length; events.push({ start: cursor, dur: 1.5, type: 'note', midis: [60] }); cursor += 1.5; return `<span class="j-ev" data-bar="${barIdx}" data-v="0" data-ev="${idx}">${ch}<span class="j-dot">·</span></span>`; }
+        if (tok.t === 'dot8') { const idx = events.length; events.push({ start: cursor, dur: 0.75, type: 'note', midis: [60] }); cursor += 0.75; return `<span class="j-ev" data-bar="${barIdx}" data-v="0" data-ev="${idx}">${ch}<span class="j-dot">·</span></span>`; }
+        if (tok.t === 'u1') return `<span class="u1">${tok.items.map(walk).join('')}</span>`;
+        if (tok.t === 'u2') return `<span class="u2-inner">${tok.items.map(walk).join('')}</span>`;
+        if (tok.t === 'sync') return `<span class="j-group-tight">${tok.items.map(walk).join('')}</span>`;
+        if (tok.t === 'tri') return `<span class="triplet"><span class="u1">${tok.items.map(walk).join('')}</span></span>`;
+        return '';
+      }
+      return { html: `<div class="jianpu-bar">${pattern.groups.map(walk).join('')}</div>`, events, barBeats: 4 };
+    }
+
+    // 內建 4/4 五線譜 SVG 渲染器（測驗與圖鑑用）
+    function compileBuiltInStaff(pattern, barIdx = 0) {
+      const events = [];
+      const u1Groups = [];
+      const u2Groups = [];
+      const triGroups = [];
+      let cursor = 0;
+
+      function walk(tok, ctx) {
+        if (tok.t === 'n' || tok.t === 'half' || tok.t === 'dotQ' || tok.t === 'dot8') {
+          const dur = tok.t === 'half' ? 2 : tok.t === 'dotQ' ? 1.5 : tok.t === 'dot8' ? 0.75 : tok.dur;
+          const idx = events.length;
+          const item = {
+            idx, start: cursor, dur, type: 'note',
+            hollow: tok.t === 'half',
+            dotted: tok.t === 'dotQ' || tok.t === 'dot8',
+            inU1: ctx.inU1,
+            inU2: ctx.inU2,
+            isEighthAlone: ctx.isEighthAlone,
+          };
+          events.push(item);
+          if (ctx.u1Arr) ctx.u1Arr.push(item);
+          if (ctx.u2Arr) ctx.u2Arr.push(item);
+          if (ctx.triArr) ctx.triArr.push(item);
+          cursor += dur;
+          return;
+        }
+        if (tok.t === 'r') {
+          const idx = events.length;
+          events.push({ idx, start: cursor, dur: tok.dur, type: 'rest', inU1: ctx.inU1 });
+          cursor += tok.dur;
+          return;
+        }
+        if (tok.t === 'u1') {
+          const notesInU1 = [];
+          const hasOnlyOneNote = tok.items.filter(it => it.t !== 'r').length <= 1;
+          tok.items.forEach(it => walk(it, { ...ctx, inU1: true, u1Arr: notesInU1, isEighthAlone: hasOnlyOneNote && it.t === 'n' }));
+          if (notesInU1.length >= 2) u1Groups.push(notesInU1);
+          return;
+        }
+        if (tok.t === 'u2') {
+          const notesInU2 = [];
+          tok.items.forEach(it => walk(it, { ...ctx, inU2: true, u2Arr: notesInU2 }));
+          if (notesInU2.length >= 1) u2Groups.push({ notes: notesInU2, parentU1: ctx.u1Arr });
+          return;
+        }
+        if (tok.t === 'sync') {
+          tok.items.forEach(it => walk(it, ctx));
+          return;
+        }
+        if (tok.t === 'tri') {
+          const notesInTri = [];
+          tok.items.forEach(it => walk(it, { ...ctx, inU1: true, u1Arr: notesInTri, triArr: notesInTri }));
+          if (notesInTri.length >= 2) {
+            u1Groups.push(notesInTri);
+            triGroups.push(notesInTri);
           }
         }
       }
 
-      onProgress(showedFirst ? 0.52 : 0.45);
-      const res = await rb.recognizeRasterPdfs(rasterPdfs, {
-        onPage: (d, t) => onProgress(0.45 + 0.48 * (d / Math.max(1, t))),
-        cancelled: () => myGen !== _loadGen,
-        ...(probe?.pages ? { firstPages: new Map(probe.pages) } : {}),
+      pattern.groups.forEach(g => walk(g, { inU1: false, inU2: false, isEighthAlone: false }));
+
+      const xStart = 58, xSpan = 232, ny = 34.5, stemTop = 14;
+      const xOf = (ev) => xStart + (ev.start / 4) * xSpan + Math.min(12, ev.dur * 6);
+
+      const lines = [24, 31, 38, 45, 52].map(y =>
+        `<line x1="6" y1="${y}" x2="304" y2="${y}" stroke="#b9b2a6" stroke-width="1"/>`
+      ).join('');
+
+      const clefAndSig = `
+        <text x="10" y="48" font-size="36" fill="currentColor" font-family="serif">𝄞</text>
+        <text x="36" y="36" font-size="14" font-weight="700" fill="currentColor" text-anchor="middle">4</text>
+        <text x="36" y="50" font-size="14" font-weight="700" fill="currentColor" text-anchor="middle">4</text>
+        <line x1="6" y1="24" x2="6" y2="52" stroke="currentColor" stroke-width="1.2"/>
+        <line x1="304" y1="24" x2="304" y2="52" stroke="currentColor" stroke-width="1.4"/>
+      `;
+
+      const evSvg = events.map(ev => {
+        const x = xOf(ev);
+        const attr = `class="s-ev" data-bar="${barIdx}" data-v="0" data-ev="${ev.idx}"`;
+        if (ev.type === 'rest') {
+          if (ev.dur <= 0.6) {
+            return `<g ${attr}><circle cx="${x - 1.5}" cy="33" r="1.8" fill="currentColor"/><path d="M${x - 1} 34 Q${x + 2.5} 34 ${x + 3} 31 L${x - 1} 45" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round"/></g>`;
+          }
+          return `<g ${attr}><path d="M${x - 2} 27 L${x + 2.5} 32.5 L${x - 1.5} 37.5 L${x + 2.5} 42 Q${x - 2} 41 ${x - 1.5} 45.5" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></g>`;
+        }
+        const sx = x + 4.3;
+        const head = ev.hollow
+          ? `<ellipse cx="${x}" cy="${ny}" rx="4.8" ry="3.3" transform="rotate(-18 ${x} ${ny})" fill="none" stroke="currentColor" stroke-width="1.8"/>`
+          : `<ellipse cx="${x}" cy="${ny}" rx="4.8" ry="3.3" transform="rotate(-18 ${x} ${ny})" fill="currentColor"/>`;
+        const stem = `<line x1="${sx}" y1="${ny - 1}" x2="${sx}" y2="${stemTop}" stroke="currentColor" stroke-width="1.4"/>`;
+        const dot = ev.dotted ? `<circle cx="${x + 8.5}" cy="${ny - 1}" r="1.7" fill="currentColor"/>` : '';
+        const flag = ev.isEighthAlone
+          ? `<path d="M${sx} ${stemTop} C${sx + 6} ${stemTop + 4} ${sx + 6} ${stemTop + 10} ${sx + 2} ${stemTop + 14}" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round"/>`
+          : '';
+        return `<g ${attr}>${head}${stem}${dot}${flag}</g>`;
+      }).join('');
+
+      const beams1 = u1Groups.map(grp => {
+        const x1 = xOf(grp[0]) + 4.3;
+        const x2 = xOf(grp[grp.length - 1]) + 4.3;
+        return `<rect x="${x1 - 0.6}" y="${stemTop - 0.5}" width="${x2 - x1 + 1.2}" height="3.2" fill="currentColor"/>`;
+      }).join('');
+
+      const beams2 = u2Groups.map(({ notes, parentU1 }) => {
+        if (notes.length >= 2) {
+          const x1 = xOf(notes[0]) + 4.3;
+          const x2 = xOf(notes[notes.length - 1]) + 4.3;
+          return `<rect x="${x1 - 0.6}" y="${stemTop + 4.2}" width="${x2 - x1 + 1.2}" height="3.0" fill="currentColor"/>`;
+        }
+        const only = notes[0];
+        const sx = xOf(only) + 4.3;
+        const dir = parentU1 && parentU1[parentU1.length - 1] === only ? -1 : 1;
+        const bx = dir > 0 ? sx : sx - 8;
+        return `<rect x="${bx}" y="${stemTop + 4.2}" width="8" height="3.0" fill="currentColor"/>`;
+      }).join('');
+
+      const tris = triGroups.map(grp => {
+        const x1 = xOf(grp[0]) - 2;
+        const x2 = xOf(grp[grp.length - 1]) + 6;
+        const xm = (x1 + x2) / 2;
+        return `<path d="M${x1} 10 L${x1} 6 L${xm - 6} 6 M${xm + 6} 6 L${x2} 6 L${x2} 10" stroke="var(--sl-slate)" stroke-width="1.1" fill="none"/><text x="${xm}" y="9" font-size="9" font-weight="700" fill="var(--sl-slate)" text-anchor="middle">3</text>`;
+      }).join('');
+
+      return {
+        html: `<svg class="staff-quiz-svg" viewBox="0 0 310 68">${lines}${clefAndSig}${evSvg}${beams1}${beams2}${tris}</svg>`,
+        events: events.map(e => ({ start: e.start, dur: e.dur, type: e.type, midis: [60] })),
+        barBeats: 4,
+      };
+    }
+
+    function compileBuiltIn(pattern, symMode = 'staff', barIdx = 0) {
+      if (symMode === 'staff') return compileBuiltInStaff(pattern, barIdx);
+      return compileBuiltInJianpu(pattern, symMode, barIdx);
+    }
+
+    let audioCtx = null, playbackSession = 0, schedulerTimer = null, rafId = null, activeAudioNodes = [];
+    function ensureAudioCtx() { if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)(); if (audioCtx.state === 'suspended') audioCtx.resume(); }
+    function stopQuizAudio() {
+      playbackSession++;
+      if (schedulerTimer) { clearInterval(schedulerTimer); schedulerTimer = null; }
+      if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+      activeAudioNodes.forEach(node => { try { node.stop(); } catch {} try { node.disconnect(); } catch {} });
+      activeAudioNodes = [];
+      document.querySelectorAll('#beatDots .led').forEach(l => l.classList.remove('countin', 'playing'));
+      document.getElementById('beatStatus').textContent = '就緒';
+      document.querySelectorAll('.j-ev.active-note, .j-ev .active-note, .s-ev.active-note').forEach(el => el.classList.remove('active-note'));
+      document.querySelectorAll('.playing-card').forEach(el => el.classList.remove('playing-card'));
+    }
+    function playQuizPattern(pat, cardEl = null, containerEl = null) {
+      ensureAudioCtx(); stopQuizAudio();
+      const mySession = playbackSession, bpm = Number(document.getElementById('bpmRange').value), beatSec = 60 / bpm;
+      const useCountIn = document.getElementById('chkCountIn').checked, useMetro = document.getElementById('chkMetro').checked;
+      const soundType = document.getElementById('soundSelect').value, symMode = document.getElementById('symbolSelect').value;
+      const compiled = compileBuiltIn(pat, symMode, 0);
+      const countIn = useCountIn ? 4 : 0, startTime = audioCtx.currentTime + 0.07, barStart = startTime + countIn * beatSec, totalEnd = barStart + 4 * beatSec;
+      const q = [];
+      for (let b = 0; b < countIn; b++) q.push({ time: startTime + b * beatSec, kind: 'metro', accent: b === 0 });
+      if (useMetro) for (let b = 0; b < 4; b++) q.push({ time: barStart + b * beatSec, kind: 'metro', accent: b === 0 });
+      compiled.events.forEach(ev => { if (ev.type === 'note') q.push({ time: barStart + ev.start * beatSec, durSec: ev.dur * beatSec, kind: 'note' }); });
+      q.sort((a, b) => a.time - b.time);
+      let idx = 0;
+      const sched = () => {
+        if (mySession !== playbackSession) return;
+        const h = audioCtx.currentTime + 0.25;
+        while (idx < q.length && q[idx].time <= h) {
+          const it = q[idx++];
+          const osc = audioCtx.createOscillator(), gain = audioCtx.createGain();
+          if (it.kind === 'metro') {
+            osc.type = 'sine'; osc.frequency.setValueAtTime(it.accent ? 1480 : 960, it.time);
+            gain.gain.setValueAtTime(0.0001, it.time); gain.gain.linearRampToValueAtTime(it.accent ? 0.2 : 0.11, it.time + 0.002);
+            gain.gain.exponentialRampToValueAtTime(0.0001, it.time + 0.04);
+            osc.connect(gain); gain.connect(audioCtx.destination); osc.start(it.time); osc.stop(it.time + 0.045);
+          } else {
+            const d = Math.max(0.07, it.durSec * 0.9);
+            osc.type = soundType === 'synth' ? 'sawtooth' : 'triangle';
+            osc.frequency.setValueAtTime(soundType === 'wood' ? 780 : 261.63, it.time);
+            gain.gain.setValueAtTime(0.0001, it.time); gain.gain.linearRampToValueAtTime(0.32, it.time + 0.006);
+            gain.gain.exponentialRampToValueAtTime(0.0001, it.time + (soundType === 'wood' ? 0.085 : d));
+            osc.connect(gain); gain.connect(audioCtx.destination); osc.start(it.time); osc.stop(it.time + d + 0.02);
+          }
+          activeAudioNodes.push(osc);
+        }
+      };
+      sched(); schedulerTimer = setInterval(sched, 60);
+      const tick = () => {
+        if (mySession !== playbackSession) return;
+        const now = audioCtx.currentTime;
+        if (now >= totalEnd + 0.06) { stopQuizAudio(); return; }
+        const leds = document.querySelectorAll('#beatDots .led');
+        leds.forEach(l => l.classList.remove('countin', 'playing'));
+        if (now < barStart) {
+          const b = Math.floor((now - startTime) / beatSec);
+          if (b >= 0 && b < leds.length) leds[b].classList.add('countin');
+          document.getElementById('beatStatus').textContent = '預拍';
+        } else {
+          const eb = (now - barStart) / beatSec, b = Math.floor(eb);
+          if (b >= 0 && b < leds.length) leds[b].classList.add('playing');
+          document.getElementById('beatStatus').textContent = `第${Math.min(4, b + 1)}拍`;
+          if (cardEl) cardEl.classList.add('playing-card');
+          if (containerEl) {
+            containerEl.querySelectorAll('.j-ev.active-note, .j-ev .active-note, .s-ev.active-note').forEach(el => el.classList.remove('active-note'));
+            compiled.events.forEach((ev, evIdx) => {
+              if (eb >= ev.start - 0.02 && eb < ev.start + ev.dur - 0.02) {
+                const el = containerEl.querySelector(`[data-ev="${evIdx}"]`);
+                if (el?.dataset?.half === '1') {
+                  const sub = eb >= ev.start + 0.98 ? '.j-dash' : '.j-main';
+                  el.querySelector(sub)?.classList.add('active-note');
+                } else {
+                  el?.classList.add('active-note');
+                }
+              }
+            });
+          }
+        }
+        rafId = requestAnimationFrame(tick);
+      };
+      rafId = requestAnimationFrame(tick);
+    }
+
+    let selectedCats = new Set(Object.keys(CATEGORIES)), currentTab = 'analyzer', currentQuestion = null, quizLocked = false;
+    let stats = { correct: 0, total: 0, streak: 0 };
+
+    function shuffle(arr) { const a = [...arr]; for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
+
+    function initCategories() {
+      const bar = document.getElementById('catBar');
+      Object.entries(CATEGORIES).forEach(([k, label]) => {
+        const btn = document.createElement('button'); btn.className = 'cat-pill active'; btn.textContent = label;
+        btn.addEventListener('click', () => {
+          if (selectedCats.has(k)) { if (selectedCats.size === 1) return; selectedCats.delete(k); btn.classList.remove('active'); }
+          else { selectedCats.add(k); btn.classList.add('active'); }
+          renderLibrary(); generateQuestion(false);
+        });
+        bar.appendChild(btn);
       });
-      if (myGen !== _loadGen) return { engine: "cancelled", info: "" };
+    }
 
-      if (res.xml) {
-        xml = res.xml;
-        engine = "raster-staff";
-      } else if (kind === "staff") {
-        throw new Error("未偵測到五線譜");
+    function generateQuestion(autoPlay = false) {
+      stopQuizAudio(); quizLocked = false; document.getElementById('feedbackBanner').className = 'result-strip';
+      const pool = PATTERNS.filter(p => selectedCats.has(p.cat)), target = pool[Math.floor(Math.random() * pool.length)];
+      const seen = new Set([compileBuiltInJianpu(target, '1').html]), dist = [];
+      for (const c of shuffle(pool)) { if (dist.length >= 3) break; const h = compileBuiltInJianpu(c, '1').html; if (!seen.has(h)) { seen.add(h); dist.push(c); } }
+      currentQuestion = { target, options: shuffle([target, ...dist]) };
+      renderQuizOptions();
+      if (autoPlay) playQuizPattern(currentQuestion.target);
+    }
+
+    function renderQuizOptions() {
+      if (!currentQuestion) return;
+      const grid = document.getElementById('optionsGrid'), sym = document.getElementById('symbolSelect').value;
+      grid.innerHTML = '';
+      ['甲','乙','丙','丁'].forEach((k, i) => {
+        const opt = currentQuestion.options[i], card = document.createElement('div'); card.className = 'pad';
+        card.innerHTML = `<span class="pad-idx">${k}</span><div class="opt-notation" style="width:100%;display:flex;justify-content:center;">${compileBuiltIn(opt, sym).html}</div><div class="pad-meta hidden"></div>`;
+        card.addEventListener('click', () => handleQuizAnswer(opt));
+        grid.appendChild(card);
+      });
+    }
+
+    function handleQuizAnswer(chosen) {
+      if (quizLocked) return; quizLocked = true; stopQuizAudio();
+      const ok = chosen.id === currentQuestion.target.id;
+      stats.total++; if (ok) { stats.correct++; stats.streak++; } else { stats.streak = 0; }
+      document.getElementById('statCorrect').textContent = stats.correct;
+      document.getElementById('statTotal').textContent = stats.total;
+      document.getElementById('statStreak').textContent = stats.streak;
+      document.querySelectorAll('#optionsGrid .pad').forEach((card, i) => {
+        card.classList.add('locked');
+        const opt = currentQuestion.options[i], meta = card.querySelector('.pad-meta');
+        meta.classList.remove('hidden'); meta.innerHTML = `<span>${opt.name}</span>`;
+        const btn = document.createElement('button'); btn.className = 'btn btn-xs'; btn.textContent = '試聽';
+        btn.addEventListener('click', (e) => { e.stopPropagation(); playQuizPattern(opt, card, card.querySelector('.opt-notation')); });
+        meta.appendChild(btn);
+        if (opt.id === currentQuestion.target.id) card.classList.add('correct');
+        else if (opt.id === chosen.id && !ok) card.classList.add('wrong');
+        else card.classList.add('dimmed');
+      });
+      const banner = document.getElementById('feedbackBanner'), text = document.getElementById('feedbackText');
+      banner.className = ok ? 'result-strip show ok' : 'result-strip show err';
+      text.textContent = ok ? `答對：${currentQuestion.target.name}` : `正解：${currentQuestion.target.name}`;
+    }
+
+    function renderLibrary() {
+      const list = document.getElementById('libraryList'), sym = document.getElementById('symbolSelect').value;
+      list.innerHTML = '';
+      const tagClsMap = { syncopation: 'tag-sync', dotted: 'tag-dot', sixteenth: 'tag-16', offbeat: 'tag-off' };
+      PATTERNS.filter(p => selectedCats.has(p.cat)).forEach(pat => {
+        const card = document.createElement('div'); card.className = 'lib-card';
+        card.innerHTML = `<div class="card-top"><span style="font-size:0.84rem;font-weight:700;">${pat.name}</span><span class="tag ${tagClsMap[pat.cat]||''}">${CATEGORIES[pat.cat]}</span></div><div class="lib-notation" style="display:flex;justify-content:center;">${compileBuiltIn(pat, sym).html}</div>`;
+        card.addEventListener('click', () => playQuizPattern(pat, card, card.querySelector('.lib-notation')));
+        list.appendChild(card);
+      });
+    }
+
+    // ==========================================
+    // 4. 事件綁定
+    // ==========================================
+    function switchTab(tabName) {
+      stopQuizAudio();
+      window.__dolceEngine?.stopPlayback();
+      currentTab = tabName;
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tabName));
+      document.getElementById('analyzerSection').classList.toggle('hidden', tabName !== 'analyzer');
+      document.getElementById('quizSection').classList.toggle('hidden', tabName !== 'quiz');
+      document.getElementById('librarySection').classList.toggle('hidden', tabName !== 'library');
+      document.getElementById('transportPanel').classList.toggle('hidden', tabName === 'analyzer');
+      document.getElementById('beatStrip').classList.toggle('hidden', tabName === 'analyzer');
+    }
+
+    document.querySelectorAll('.tab-btn').forEach(btn => btn.addEventListener('click', () => switchTab(btn.dataset.tab)));
+    document.getElementById('bpmRange').addEventListener('input', (e) => document.getElementById('bpmVal').textContent = e.target.value);
+    document.querySelectorAll('.toggle input').forEach(el => el.addEventListener('change', () => el.parentElement.classList.toggle('on', el.checked)));
+
+    document.getElementById('symbolSelect').addEventListener('change', (e) => {
+      try { localStorage.setItem(NOTATION_LS, e.target.value); } catch {}
+      renderLibrary();
+      if (!quizLocked) renderQuizOptions();
+      else if (currentQuestion) {
+        const sym = e.target.value;
+        document.querySelectorAll('#optionsGrid .pad').forEach((c, i) => {
+          c.querySelector('.opt-notation').innerHTML = compileBuiltIn(currentQuestion.options[i], sym).html;
+        });
       }
-    }
-  }
+    });
 
-  // 3. 簡譜圖片 / 掃描簡譜 PDF
-  if (!xml) {
-    onProgress(null);
-    const isImg = /\.(png|jpe?g|webp)$/i.test(first.name) || first.type.startsWith("image/");
-    const opt = isImg ? await maybeOptimizeImage(first) : { bytes: new Uint8Array(await first.arrayBuffer()), mime: first.type || undefined };
-    const { score } = await recognizeMusicppDetailed(opt.bytes, opt.mime);
-    if (myGen !== _loadGen) return { engine: "cancelled", info: "" };
-    onProgress(0.85);
-    const out = omrEmitter("123").emit(score);
-    if (out.kind !== "123") {
-      throw new Error("簡譜轉出異常");
-    }
-    xml = scoreDocToMusicXml(out.doc);
-    engine = "jianpu";
-  }
+    document.getElementById('btnPlayQuestion').addEventListener('click', () => { if (currentQuestion) playQuizPattern(currentQuestion.target); });
+    document.getElementById('btnStopAudio').addEventListener('click', stopQuizAudio);
+    document.getElementById('btnLibStop').addEventListener('click', stopQuizAudio);
+    document.getElementById('btnNextQuestion').addEventListener('click', () => generateQuestion(true));
+    document.getElementById('btnBannerNext').addEventListener('click', () => generateQuestion(true));
 
-  onProgress(0.95);
-  const keepView = _app.pageEls.length > 0 ? _app.viewMode : null;
-  if (!_app.adoptStaffXml(xml)) {
-    throw new Error(_app.status || "樂譜無法渲染");
-  }
-  if (keepView) {
-    await _app.setViewMode(keepView);
-  } else if (engine === "jianpu") {
-    await _app.setViewMode("expanded");
-  } else {
-    await _app.setViewMode("staff");
-  }
-  await _app.whenIdle();
-  if (_app.pageEls.length === 0) {
-    throw new Error(_app.status || "樂譜渲染失敗");
-  }
-  if (_scorePane) hideDiagnosticOverlays(_scorePane);
-  _app.visual.afterRebuild();
-  onProgress(1);
-
-  return { engine, info: "" };
-}
-
-declare global {
-  interface Window {
-    __dolceEngine?: {
-      mount: typeof initEngine;
-      loadFile: typeof recognizeAndRender;
-      loadFiles: typeof recognizeAndRender;
-      loadXmlText: (xml: string, viewMode?: ViewMode) => Promise<void>;
-      getSnapshot: () => ScoreSnapshot | null;
-      loadSnapshot: (snap: Pick<ScoreSnapshot, "format" | "text" | "viewMode">) => Promise<void>;
-      setEditMode: (on: boolean) => void;
-      commitEditMode: () => void;
-      cancelEditMode: () => Promise<void>;
-      isEditMode: () => boolean;
-      runVisualAction: (id: string, key?: string) => boolean;
-      toggleRangePick: () => void;
-      clearRangeLoop: () => void;
-      setViewMode: (m: ViewMode) => Promise<void>;
-      exportXml: () => Promise<string>;
-      zoomBy: (f: number) => void;
-      resetZoom: () => void;
-      prevPage: () => void;
-      nextPage: () => void;
-      stopPlayback: () => void;
-      getApp: () => App | null;
-    };
-  }
-}
-
-window.__dolceEngine = {
-  mount: initEngine,
-  loadFile: recognizeAndRender,
-  loadFiles: recognizeAndRender,
-  async loadXmlText(xml, viewMode = "staff") {
-    if (!_app) return;
-    _loadGen++;
-    if (_editMode) await cancelEditMode();
-    cleanupSustainCursor(_scorePane);
-    clearAbLoop(true);
-    _app.stopPlayback();
-    _app.clearPages();
-    if (!_app.adoptStaffXml(xml)) {
-      throw new Error(_app.status || "樂譜無法渲染");
-    }
-    await _app.setViewMode(viewMode);
-    await _app.whenIdle();
-    if (_app.pageEls.length === 0) {
-      throw new Error(_app.status || "樂譜渲染失敗");
-    }
-    if (_scorePane) hideDiagnosticOverlays(_scorePane);
-    _app.visual.afterRebuild();
-  },
-  getSnapshot() {
-    if (!_app || _app.pageEls.length === 0) return null;
-    const rawTitle = (_app.documentTitle() || "").trim();
-    const title = rawTitle && rawTitle !== "未命名" ? rawTitle : "已儲存樂譜";
-    return {
-      title,
-      format: _app.docFormat,
-      text: _app.getText(),
-      viewMode: _app.viewMode,
-    };
-  },
-  async loadSnapshot(snap) {
-    if (!_app) return;
-    _loadGen++;
-    if (_editMode) await cancelEditMode();
-    cleanupSustainCursor(_scorePane);
-    clearAbLoop(true);
-    _app.stopPlayback();
-    _app.clearPages();
-    if (snap.format === "musicxml") {
-      if (!_app.adoptStaffXml(snap.text)) {
-        throw new Error(_app.status || "收藏樂譜無法渲染");
+    const dropzone = document.getElementById('dropzone'), scoreInput = document.getElementById('scoreInput');
+    document.getElementById('omrKindSelect').addEventListener('click', (e) => e.stopPropagation());
+    document.getElementById('omrKindSelect').addEventListener('change', () => {
+      if (lastOmrFiles.length > 0 && lastOmrFiles.every(f => /\.(pdf|png|jpe?g|webp)$/i.test(f.name) || f.type.startsWith('image/'))) {
+        void loadScoreFiles(lastOmrFiles);
       }
-    } else {
-      _app.adoptText(snap.format, snap.text, null);
-    }
-    const targetMode = snap.viewMode === "original" ? "expanded" : snap.viewMode;
-    await _app.setViewMode(targetMode);
-    await _app.whenIdle();
-    if (_app.pageEls.length === 0) {
-      throw new Error(_app.status || "樂譜渲染失敗");
-    }
-    if (_scorePane) hideDiagnosticOverlays(_scorePane);
-    _app.visual.afterRebuild();
-  },
-  setEditMode(on) {
-    if (on) enterEditMode();
-    else void cancelEditMode();
-  },
-  commitEditMode() {
-    commitEditMode();
-  },
-  async cancelEditMode() {
-    await cancelEditMode();
-  },
-  isEditMode() {
-    return _editMode;
-  },
-  runVisualAction(id, key = "") {
-    if (!_app || !_editMode) return false;
-    if (!_app.syncFresh()) _app.reloadNow();
-    const ok = _app.visual.runById(id, key);
-    _scorePane?.focus({ preventScroll: true });
-    return ok;
-  },
-  toggleRangePick() {
-    if (_editMode) void cancelEditMode();
-    _rangePickMode = !_rangePickMode;
-    if (!_rangePickMode) {
-      _abPendingStart = null;
-      _abPreviewRange = null;
-    }
-    paintAbBands();
-    notifyRange();
-  },
-  clearRangeLoop() {
-    clearAbLoop(true);
-  },
-  async setViewMode(m) {
-    if (!_app) return;
-    cleanupSustainCursor(_scorePane);
-    clearAbLoop(false);
-    await _app.setViewMode(m);
-    if (_scorePane) hideDiagnosticOverlays(_scorePane);
-    _app.visual.afterRebuild();
-  },
-  async exportXml() {
-    return _app ? _app.musicXmlForSave() : "";
-  },
-  zoomBy(f) {
-    if (!_app) return;
-    _app.zoomBy(f);
-    _onZoomChange?.(_app.zoom);
-  },
-  resetZoom() {
-    if (!_app) return;
-    _app.resetZoom();
-    _onZoomChange?.(_app.zoom);
-  },
-  prevPage() {
-    _app?.prevPage();
-  },
-  nextPage() {
-    _app?.nextPage();
-  },
-  stopPlayback() {
-    cleanupSustainCursor(_scorePane);
-    _app?.stopPlayback();
-  },
-  getApp: () => _app,
-};
-window.dispatchEvent(new Event("dolce-engine-ready"));
+    });
+    document.getElementById('btnRetryOmr').addEventListener('click', () => { if (lastOmrFiles.length > 0) void loadScoreFiles(lastOmrFiles); });
+    document.getElementById('btnPickFile').addEventListener('click', (e) => { e.stopPropagation(); scoreInput.click(); });
+    dropzone.addEventListener('click', () => scoreInput.click());
+    scoreInput.addEventListener('change', (e) => { if (e.target.files?.length) handlePickedFiles(e.target.files); scoreInput.value = ''; });
+    dropzone.addEventListener('dragover', (e) => { e.preventDefault(); dropzone.classList.add('dragover'); });
+    dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
+    dropzone.addEventListener('drop', (e) => { e.preventDefault(); dropzone.classList.remove('dragover'); if (e.dataTransfer.files?.length) handlePickedFiles(e.dataTransfer.files); });
+
+    document.getElementById('btnConfirmOrder').addEventListener('click', () => {
+      if (!pendingQueue.length) return;
+      const ordered = pendingQueue.map(x => x.file);
+      clearPendingQueue();
+      void loadScoreFiles(ordered);
+    });
+    document.getElementById('btnCancelOrder').addEventListener('click', clearPendingQueue);
+
+    // 選段反覆控制
+    document.getElementById('myBtnRangeMode').addEventListener('click', () => window.__dolceEngine?.toggleRangePick());
+    document.getElementById('myBtnRangeClear').addEventListener('click', () => window.__dolceEngine?.clearRangeLoop());
+
+    // 我的最愛
+    document.getElementById('myBtnFavList').addEventListener('click', async () => {
+      const panel = document.getElementById('favPanel');
+      const btn = document.getElementById('myBtnFavList');
+      const open = panel.classList.contains('hidden');
+      panel.classList.toggle('hidden', !open);
+      btn.classList.toggle('fav-open', open);
+      if (open) await renderFavoritesPanel();
+    });
+    document.getElementById('btnCloseFav').addEventListener('click', () => {
+      document.getElementById('favPanel').classList.add('hidden');
+      document.getElementById('myBtnFavList').classList.remove('fav-open');
+    });
+    document.getElementById('myBtnFavToggle').addEventListener('click', async () => {
+      const snap = window.__dolceEngine?.getSnapshot();
+      if (!snap) return;
+      const hash = hashSnapshot(snap.format, snap.text);
+      const list = await getAllFavorites();
+      const existing = list.find(x => x.hash === hash);
+      if (existing) {
+        await deleteFavorite(existing.id);
+      } else {
+        await putFavorite({
+          id: `fav_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+          hash,
+          title: snap.title,
+          format: snap.format,
+          text: snap.text,
+          viewMode: snap.viewMode,
+          createdAt: Date.now(),
+        });
+      }
+      await syncFavToggleButton();
+      if (!document.getElementById('favPanel').classList.contains('hidden')) {
+        await renderFavoritesPanel();
+      }
+    });
+
+    ['myViewStaff', 'myViewMixed', 'myViewExpanded'].forEach(id => {
+      document.getElementById(id).addEventListener('click', () => setTimeout(() => void syncFavToggleButton(), 150));
+    });
+
+    document.getElementById('myBtnZoomIn').addEventListener('click', () => window.__dolceEngine?.zoomBy(1.2));
+    document.getElementById('myBtnZoomOut').addEventListener('click', () => window.__dolceEngine?.zoomBy(1 / 1.2));
+    document.getElementById('myBtnZoomReset').addEventListener('click', () => window.__dolceEngine?.resetZoom());
+    document.getElementById('myBtnPrevPage').addEventListener('click', () => window.__dolceEngine?.prevPage());
+    document.getElementById('myBtnNextPage').addEventListener('click', () => window.__dolceEngine?.nextPage());
+
+    document.getElementById('myBtnExportXml').addEventListener('click', async () => {
+      const xml = await window.__dolceEngine?.exportXml();
+      if (!xml) return;
+      const blob = new Blob([xml], { type: 'application/vnd.recordare.musicxml+xml' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'score.musicxml';
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    });
+
+    initCategories();
+    renderLibrary();
+    generateQuestion(false);
+    // 立即啟動引擎與模型預載，移除 300ms 延遲以加快手機端就緒速度
+    void ensureDolceEngine();
+  </script>
+</body>
+</html>
