@@ -53,6 +53,7 @@
 
     #sl-app button, #sl-app select, #sl-app input {
       font-family: var(--sl-serif);
+      margin: 0;
     }
 
     #sl-app.sl-app { max-width: 1080px; margin: 0 auto; }
@@ -64,23 +65,25 @@
       border-bottom: 1px solid var(--sl-line); margin-bottom: 16px;
     }
     #sl-app .brand { display: flex; align-items: center; gap: 10px; }
-    #sl-app .brand-sq { width: 10px; height: 10px; border-radius: 2px; background: var(--sl-sage); }
+    #sl-app .brand-sq { width: 10px; height: 10px; border-radius: 2px; background: var(--sl-sage); flex-shrink: 0; }
     #sl-app .brand h1 { margin: 0; font-size: 1.02rem; letter-spacing: 0.18em; font-weight: 700; color: var(--sl-text); }
-    #sl-app .top-actions { display: flex; align-items: center; gap: 10px; }
+    #sl-app .top-actions { display: flex; align-items: center; gap: 8px; }
 
     #sl-app .mono-tag {
       font-size: 0.76rem; color: var(--sl-muted); background: var(--sl-surface);
-      border: 1px solid var(--sl-line); border-radius: 6px; padding: 4px 9px;
+      border: 1px solid var(--sl-line); border-radius: 6px; padding: 0 9px;
+      height: 30px; display: inline-flex; align-items: center; white-space: nowrap; flex-shrink: 0;
     }
 
     #sl-app .tabs {
-      display: flex; gap: 3px; background: var(--sl-surface-2);
+      display: inline-flex; align-items: center; gap: 3px; background: var(--sl-surface-2);
       border: 1px solid var(--sl-line); border-radius: 8px; padding: 3px;
     }
     #sl-app .tab-btn {
       border: none; background: transparent; color: var(--sl-muted);
-      padding: 6px 14px; font-size: 0.84rem; font-weight: 600; cursor: pointer;
+      padding: 0 14px; height: 28px; font-size: 0.84rem; font-weight: 600; cursor: pointer;
       border-radius: 6px; transition: background 0.15s, color 0.15s;
+      display: inline-flex; align-items: center; justify-content: center; white-space: nowrap;
     }
     #sl-app .tab-btn.active {
       background: var(--sl-surface); color: var(--sl-text);
@@ -94,87 +97,95 @@
       box-shadow: 0 2px 10px rgba(47, 45, 42, 0.03);
     }
     #sl-app .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+    #sl-app .row-nowrap { display: inline-flex; flex-wrap: nowrap; align-items: center; gap: 6px; }
     #sl-app .between { justify-content: space-between; }
 
     /* Controls */
     #sl-app .ctrl-pill {
-      display: inline-flex; align-items: center; gap: 8px;
+      display: inline-flex; align-items: center; gap: 8px; height: 32px;
       background: var(--sl-surface-2); border: 1px solid var(--sl-line);
-      border-radius: 6px; padding: 5px 10px; font-size: 0.8rem; color: var(--sl-text);
+      border-radius: 6px; padding: 0 10px; font-size: 0.8rem; color: var(--sl-text);
     }
     #sl-app input[type="range"] { width: 80px; accent-color: var(--sl-sage); cursor: pointer; }
     #sl-app select {
       background: var(--sl-surface); color: var(--sl-text); border: 1px solid var(--sl-line-hi);
-      border-radius: 6px; padding: 6px 10px; font-size: 0.82rem; font-weight: 600;
-      outline: none; cursor: pointer;
+      border-radius: 6px; padding: 0 10px; height: 32px; font-size: 0.82rem; font-weight: 600;
+      outline: none; cursor: pointer; vertical-align: middle; flex-shrink: 0;
     }
 
     #sl-app .toggle {
-      display: inline-flex; align-items: center; gap: 6px;
+      display: inline-flex; align-items: center; gap: 6px; height: 32px;
       background: var(--sl-surface-2); border: 1px solid var(--sl-line); border-radius: 6px;
-      padding: 6px 10px; font-size: 0.8rem; font-weight: 600; color: var(--sl-muted); cursor: pointer; user-select: none;
+      padding: 0 10px; font-size: 0.8rem; font-weight: 600; color: var(--sl-muted);
+      cursor: pointer; user-select: none; white-space: nowrap;
     }
     #sl-app .toggle input { display: none; }
     #sl-app .toggle .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--sl-line-hi); }
     #sl-app .toggle.on { color: var(--sl-sage); border-color: var(--sl-sage); background: var(--sl-sage-bg); }
     #sl-app .toggle.on .dot { background: var(--sl-sage); }
 
-    /* 按鍵 */
+    /* 按鍵（統一高度與幾何對齊，防止外部樣式破壞） */
     #sl-app .btn {
       border: 1px solid var(--sl-line-hi); background: var(--sl-surface); color: var(--sl-text);
-      padding: 7px 13px; font-size: 0.82rem; font-weight: 600; cursor: pointer;
+      padding: 0 13px; height: 32px; line-height: 1; font-size: 0.82rem; font-weight: 600; cursor: pointer;
       display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-      border-radius: 6px; transition: all 0.15s ease;
+      border-radius: 6px; transition: all 0.15s ease; white-space: nowrap; flex-shrink: 0; vertical-align: middle;
     }
     #sl-app .btn:hover:not(:disabled) { filter: brightness(0.96); }
     #sl-app .btn:disabled { opacity: 0.38; cursor: not-allowed; }
-    #sl-app .btn-xs { padding: 5px 11px; font-size: 0.78rem; }
+    #sl-app .btn-xs { padding: 0 11px; height: 30px; font-size: 0.78rem; }
     #sl-app .btn-primary { background: var(--sl-sage); color: #fff; border-color: var(--sl-sage); }
+
+    /* 純 SVG 圖示按鍵 */
+    #sl-app .btn-icon {
+      padding: 0 !important; width: 32px; min-width: 32px; height: 32px;
+      display: inline-flex; align-items: center; justify-content: center;
+    }
+    #sl-app .btn-icon.btn-xs { width: 28px; min-width: 28px; height: 28px; }
+    #sl-app .btn-icon svg { width: 16px; height: 16px; display: block; pointer-events: none; flex-shrink: 0; }
 
     /* 工具列三行視覺分區 */
     #sl-app .toolbar-stack { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
     #sl-app .toolbar-row {
       display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
-      padding: 9px 12px; border-radius: 8px; border: 1px solid var(--sl-line);
+      padding: 8px 12px; border-radius: 8px; border: 1px solid var(--sl-line);
     }
 
     /* Row 1: 播放列（莫蘭迪鼠尾草綠） */
     #sl-app .row-play { background: var(--sl-sage-bg); border-color: #cedad0; }
-    #sl-app .row-play .btn { border-color: #b7cbb9; color: #3a523f; background: #f8fbf8; }
+    #sl-app .row-play .btn { border-color: #b7cbb9; color: #3a523f; background: #f8fbf8; height: 32px; }
     #sl-app .row-play .btn-play-main { background: var(--sl-sage); color: #fff; border-color: var(--sl-sage); }
     #sl-app .row-play .btn.active { background: var(--sl-sage); color: #fff; border-color: var(--sl-sage); }
     #sl-app .row-play .btn-range.picking { background: var(--sl-amber); color: #fff; border-color: var(--sl-amber); }
     #sl-app .row-play .btn-range.picking.has-start { background: var(--sl-clay); color: #fff; border-color: var(--sl-clay); }
     #sl-app .row-play .btn-range-clear { border-color: #d9bbbb; color: var(--sl-coral); background: #fdf9f9; }
-    #sl-app .row-play select { border-color: #b7cbb9; color: #3a523f; background: #f8fbf8; }
-    #sl-app .row-play .mono-tag { background: #f8fbf8; border-color: #b7cbb9; color: #3a523f; }
-    #sl-app .progress-wrap { display: inline-flex; align-items: center; gap: 8px; flex: 1; min-width: 190px; }
-    #sl-app .progress-wrap input[type="range"] { flex: 1; min-width: 90px; }
+    #sl-app .row-play select { border-color: #b7cbb9; color: #3a523f; background: #f8fbf8; height: 32px; }
+    #sl-app .row-play .mono-tag { background: #f8fbf8; border-color: #b7cbb9; color: #3a523f; height: 32px; }
+    #sl-app .progress-wrap { display: inline-flex; align-items: center; gap: 8px; flex: 1 1 200px; min-width: 180px; }
+    #sl-app .progress-wrap input[type="range"] { flex: 1; min-width: 80px; height: 20px; }
 
     /* Row 2: 譜面視圖列（莫蘭迪霧霾藍） */
     #sl-app .row-view { background: var(--sl-slate-bg); border-color: #ced7e0; }
-    #sl-app .row-view .btn { border-color: #b7c4d1; color: #3b4b5c; background: #f7fafc; }
+    #sl-app .row-view .btn { border-color: #b7c4d1; color: #3b4b5c; background: #f7fafc; height: 30px; }
     #sl-app .row-view .btn.active { background: var(--sl-slate); color: #fff; border-color: var(--sl-slate); }
 
     /* Row 3: 頁面與收藏工具列（莫蘭迪暖陶米） */
     #sl-app .row-tools { background: var(--sl-clay-bg); border-color: #ded2c8; justify-content: space-between; }
-    #sl-app .row-tools .btn { border-color: #cbbab0; color: #5e4739; background: #fbf9f7; }
+    #sl-app .row-tools .btn { border-color: #cbbab0; color: #5e4739; background: #fbf9f7; height: 32px; }
     #sl-app .row-tools .btn-export { background: var(--sl-clay); color: #fff; border-color: var(--sl-clay); }
 
-    /* 純 SVG 圖示按鍵 */
-    #sl-app .btn-icon { padding: 6px 8px; min-width: 34px; min-height: 30px; line-height: 1; }
-    #sl-app .btn-icon svg { width: 16px; height: 16px; display: block; pointer-events: none; }
     #sl-app .btn-fav { border-color: #d9bbbb !important; color: var(--sl-rose) !important; background: #fdf9f9 !important; }
     #sl-app .btn-fav.fav-saved { background: var(--sl-rose) !important; color: #fff !important; border-color: var(--sl-rose) !important; }
     #sl-app .btn-fav-top.fav-open { background: var(--sl-rose-bg) !important; border-color: var(--sl-rose) !important; }
 
-    #sl-app .playback-icon { display: inline-flex; align-items: center; width: 10px; height: 10px; }
+    #sl-app .playback-icon { display: inline-flex; align-items: center; width: 10px; height: 10px; flex-shrink: 0; }
     #sl-app .playback-icon svg { width: 10px; height: 10px; display: block; }
 
     #sl-app .cat-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--sl-line); }
     #sl-app .cat-pill {
       border: 1px solid var(--sl-line); background: var(--sl-surface-2); color: var(--sl-muted);
-      border-radius: 6px; padding: 4px 10px; font-size: 0.76rem; font-weight: 600; cursor: pointer;
+      border-radius: 6px; padding: 0 10px; height: 28px; font-size: 0.76rem; font-weight: 600; cursor: pointer;
+      display: inline-flex; align-items: center; justify-content: center;
     }
     #sl-app .cat-pill.active { border-color: var(--sl-sage); color: var(--sl-sage); background: var(--sl-sage-bg); }
 
@@ -235,21 +246,45 @@
     }
     #sl-app .omr-status-bar.err { color: var(--sl-coral); border-color: #dfc3c3; background: var(--sl-coral-bg); }
 
-    /* 多頁順序確認面板 */
+    /* 多頁順序確認面板（精準單行對齊排版） */
     #sl-app .queue-panel {
       margin-top: 12px; padding: 14px; border-radius: 8px;
       background: var(--sl-amber-bg); border: 1px solid #dfd0b8;
     }
     #sl-app .queue-grid {
-      display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 10px; margin: 12px 0 4px;
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(172px, 1fr)); gap: 10px; margin: 12px 0 4px;
     }
     #sl-app .queue-item {
-      background: var(--sl-surface); border: 1px solid var(--sl-line-hi); border-radius: 8px; padding: 6px;
-      display: flex; flex-direction: column; gap: 6px; cursor: grab; user-select: none;
+      background: var(--sl-surface); border: 1px solid var(--sl-line-hi); border-radius: 8px; padding: 8px;
+      display: flex; flex-direction: column; gap: 8px; cursor: grab; user-select: none; min-width: 0;
     }
     #sl-app .queue-item.dragging { opacity: 0.45; border-color: var(--sl-sage); }
-    #sl-app .queue-thumb { width: 100%; height: 136px; object-fit: contain; background: #fff; border-radius: 4px; display: block; }
-    #sl-app .queue-foot { display: flex; justify-content: space-between; align-items: center; gap: 4px; }
+    #sl-app .queue-thumb {
+      width: 100%; height: 150px; object-fit: contain; background: #fff;
+      border: 1px solid var(--sl-line); border-radius: 4px; display: block;
+    }
+    #sl-app .queue-foot {
+      display: flex; justify-content: space-between; align-items: center; gap: 6px; flex-wrap: nowrap;
+    }
+    #sl-app .queue-badge {
+      font-size: 0.72rem; font-weight: 700; color: var(--sl-muted);
+      background: var(--sl-surface-2); border: 1px solid var(--sl-line);
+      border-radius: 5px; padding: 0 7px; height: 26px;
+      display: inline-flex; align-items: center; justify-content: center;
+      white-space: nowrap; flex-shrink: 0;
+    }
+    #sl-app .queue-actions {
+      display: inline-flex; align-items: center; gap: 4px; flex-wrap: nowrap; flex-shrink: 0;
+    }
+    #sl-app .queue-btn {
+      width: 26px; min-width: 26px; height: 26px; padding: 0 !important;
+      border: 1px solid var(--sl-line-hi); background: var(--sl-surface); color: var(--sl-text);
+      border-radius: 5px; display: inline-flex; align-items: center; justify-content: center; cursor: pointer;
+    }
+    #sl-app .queue-btn:hover:not(:disabled) { background: var(--sl-surface-2); }
+    #sl-app .queue-btn:disabled { opacity: 0.32; cursor: not-allowed; }
+    #sl-app .queue-btn svg { width: 13px; height: 13px; display: block; pointer-events: none; }
+    #sl-app .queue-btn-del { color: var(--sl-coral); border-color: #dfc3c3; background: #fdf9f9; }
 
     /* 我的最愛面板 */
     #sl-app .fav-panel {
@@ -276,10 +311,12 @@
     }
     #sl-app #score-pane {
       flex: 1; min-height: 0; overflow: auto; padding: 16px; background: #e8e3d9;
-      user-select: none; -webkit-tap-highlight-color: transparent;
+      user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+      -webkit-tap-highlight-color: transparent;
     }
     #sl-app #score-pane.sl-picking {
       cursor: crosshair;
+      touch-action: none;
     }
 
     /* 測驗/圖鑑 五線譜 SVG & 簡譜 */
@@ -314,13 +351,14 @@
       #sl-app .toolbar-row { padding: 8px 10px; gap: 6px; }
       #sl-app .sl-score-box { height: 64vh; min-height: 360px; }
       #sl-app #score-pane { padding: 10px; }
+      #sl-app .queue-grid { grid-template-columns: repeat(auto-fill, minmax(152px, 1fr)); }
     }
     @media (max-width: 480px) {
       #sl-app .brand h1 { font-size: 0.9rem; letter-spacing: 0.12em; }
-      #sl-app .tab-btn { padding: 5px 10px; font-size: 0.78rem; }
-      #sl-app .btn-xs { padding: 5px 9px; font-size: 0.74rem; }
+      #sl-app .tab-btn { padding: 0 10px; font-size: 0.78rem; }
       #sl-app .progress-wrap { min-width: 100%; order: 10; }
-      #sl-app .queue-grid { grid-template-columns: repeat(2, 1fr); }
+      #sl-app .queue-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+      #sl-app .queue-thumb { height: 124px; }
     }
 
     #sl-app .hidden { display: none !important; }
@@ -392,7 +430,7 @@
     <section id="analyzerSection" class="panel">
       <div class="dropzone" id="dropzone">
         <div class="dropzone-title">匯入樂譜</div>
-        <div class="row">
+        <div class="row-nowrap">
           <select id="omrKindSelect" title="辨識類型">
             <option value="auto">自動</option>
             <option value="staff">五線譜</option>
@@ -414,7 +452,7 @@
       <div id="multiQueuePanel" class="queue-panel hidden">
         <div class="row between">
           <span style="font-size:0.86rem; font-weight:700; color:var(--sl-text);">確認頁面順序</span>
-          <div class="row">
+          <div class="row-nowrap">
             <button class="btn btn-primary btn-xs" id="btnConfirmOrder" type="button">開始辨識</button>
             <button class="btn btn-xs" id="btnCancelOrder" type="button">取消</button>
           </div>
@@ -443,53 +481,57 @@
         <div class="toolbar-stack">
           <!-- 第 1 行：播放與純 SVG 控制列（莫蘭迪鼠尾草綠） -->
           <div class="toolbar-row row-play">
-            <button class="btn btn-xs btn-play-main" id="myBtnPlay" type="button">
-              <span class="playback-icon"></span>
-              <span class="playback-label">播放</span>
-            </button>
-            <button class="btn btn-xs" id="myBtnStop" type="button">停止</button>
+            <div class="row-nowrap">
+              <button class="btn btn-xs btn-play-main" id="myBtnPlay" type="button">
+                <span class="playback-icon"></span>
+                <span class="playback-label">播放</span>
+              </button>
+              <button class="btn btn-xs" id="myBtnStop" type="button">停止</button>
+            </div>
             <div class="progress-wrap">
               <input type="range" id="myProgress" />
               <span class="mono-tag" id="myTime">0:00 / 0:00</span>
             </div>
-            <select id="mySpeed"></select>
-            <!-- 循環（純 SVG） -->
-            <button class="btn btn-icon" id="myBtnLoop" type="button" title="循環" aria-label="循環">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <polyline points="17 1 21 5 17 9"/>
-                <path d="M3 11V9a4 4 0 0 1 4-4h14"/>
-                <polyline points="7 23 3 19 7 15"/>
-                <path d="M21 13v2a4 4 0 0 1-4 4H3"/>
-              </svg>
-            </button>
-            <!-- 節拍（純 SVG） -->
-            <button class="btn btn-icon" id="myBtnMetro" type="button" title="節拍" aria-label="節拍">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M7 20h10l-2.5-15h-5L7 20z"/>
-                <line x1="12" y1="16" x2="18" y2="6"/>
-                <circle cx="16.2" cy="8.8" r="1.4" fill="currentColor" stroke="none"/>
-                <line x1="5" y1="20" x2="19" y2="20"/>
-              </svg>
-            </button>
-            <!-- 選段（純 SVG） -->
-            <button class="btn btn-icon btn-range" id="myBtnRangeMode" type="button" title="選段：點選起點與終點（電腦支援滑鼠框選）" aria-label="選段">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M8 4H5v16h3"/>
-                <path d="M16 4h3v16h-3"/>
-                <line x1="9" y1="12" x2="15" y2="12"/>
-                <circle cx="9" cy="12" r="1.6" fill="currentColor" stroke="none"/>
-                <circle cx="15" cy="12" r="1.6" fill="currentColor" stroke="none"/>
-              </svg>
-            </button>
-            <!-- 清除選段（純 SVG） -->
-            <button class="btn btn-icon btn-range-clear hidden" id="myBtnRangeClear" type="button" title="清除選段" aria-label="清除選段">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M7 4H4v16h3"/>
-                <path d="M17 4h3v16h-3"/>
-                <line x1="9.5" y1="9.5" x2="14.5" y2="14.5"/>
-                <line x1="14.5" y1="9.5" x2="9.5" y2="14.5"/>
-              </svg>
-            </button>
+            <div class="row-nowrap">
+              <select id="mySpeed"></select>
+              <!-- 循環（純 SVG） -->
+              <button class="btn btn-icon" id="myBtnLoop" type="button" title="循環" aria-label="循環">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="17 1 21 5 17 9"/>
+                  <path d="M3 11V9a4 4 0 0 1 4-4h14"/>
+                  <polyline points="7 23 3 19 7 15"/>
+                  <path d="M21 13v2a4 4 0 0 1-4 4H3"/>
+                </svg>
+              </button>
+              <!-- 節拍（純 SVG） -->
+              <button class="btn btn-icon" id="myBtnMetro" type="button" title="節拍" aria-label="節拍">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M7 20h10l-2.5-15h-5L7 20z"/>
+                  <line x1="12" y1="16" x2="18" y2="6"/>
+                  <circle cx="16.2" cy="8.8" r="1.4" fill="currentColor" stroke="none"/>
+                  <line x1="5" y1="20" x2="19" y2="20"/>
+                </svg>
+              </button>
+              <!-- 選段（純 SVG：長按起點拖曳至終點） -->
+              <button class="btn btn-icon btn-range" id="myBtnRangeMode" type="button" title="選段：於樂譜長按起點拖曳至終點（或點擊此鍵後直接拖曳）" aria-label="選段">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M8 4H5v16h3"/>
+                  <path d="M16 4h3v16h-3"/>
+                  <line x1="9" y1="12" x2="15" y2="12"/>
+                  <circle cx="9" cy="12" r="1.6" fill="currentColor" stroke="none"/>
+                  <circle cx="15" cy="12" r="1.6" fill="currentColor" stroke="none"/>
+                </svg>
+              </button>
+              <!-- 清除選段（純 SVG） -->
+              <button class="btn btn-icon btn-range-clear hidden" id="myBtnRangeClear" type="button" title="清除選段" aria-label="清除選段">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M7 4H4v16h3"/>
+                  <path d="M17 4h3v16h-3"/>
+                  <line x1="9.5" y1="9.5" x2="14.5" y2="14.5"/>
+                  <line x1="14.5" y1="9.5" x2="9.5" y2="14.5"/>
+                </svg>
+              </button>
+            </div>
           </div>
 
           <!-- 第 2 行：譜面視圖（莫蘭迪霧霾藍） -->
@@ -501,7 +543,7 @@
 
           <!-- 第 3 行：頁面與匯出、收藏工具（莫蘭迪暖陶米 + 純 SVG 按鍵） -->
           <div class="toolbar-row row-tools">
-            <div class="row">
+            <div class="row-nowrap">
               <!-- 縮小 SVG -->
               <button class="btn btn-icon" id="myBtnZoomOut" type="button" title="縮小" aria-label="縮小">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -533,7 +575,7 @@
                 </svg>
               </button>
             </div>
-            <div class="row">
+            <div class="row-nowrap">
               <!-- 匯出樂譜 SVG -->
               <button class="btn btn-icon btn-export" id="myBtnExportXml" type="button" title="匯出樂譜" aria-label="匯出樂譜">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -607,21 +649,12 @@
         <circle cx="9" cy="12" r="1.6" fill="currentColor" stroke="none"/>
         <circle cx="15" cy="12" r="1.6" fill="currentColor" stroke="none"/>
       </svg>`;
-    const RANGE_SVG_PICK_START = `
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M8 4H5v16h3"/>
-        <path d="M16 4h3v16h-3" opacity="0.45"/>
-        <line x1="9" y1="12" x2="15" y2="12" stroke-dasharray="2 2"/>
-        <circle cx="9" cy="12" r="2.4" fill="currentColor" stroke="none"/>
-        <circle cx="15" cy="12" r="1.4" stroke="currentColor" fill="none"/>
-      </svg>`;
-    const RANGE_SVG_PICK_END = `
+    const RANGE_SVG_DRAG = `
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M8 4H5v16h3"/>
         <path d="M16 4h3v16h-3"/>
-        <line x1="9" y1="12" x2="15" y2="12"/>
-        <circle cx="9" cy="12" r="1.8" fill="currentColor" stroke="none"/>
-        <circle cx="15" cy="12" r="2.5" stroke="currentColor" fill="none"/>
+        <line x1="8" y1="12" x2="16" y2="12"/>
+        <polyline points="13 9 16 12 13 15"/>
       </svg>`;
 
     // 載入記譜偏好（預設為五線譜）
@@ -732,8 +765,7 @@
         info.querySelector('.fav-title').textContent = item.title || '已儲存樂譜';
 
         const actions = document.createElement('div');
-        actions.className = 'row';
-        actions.style.gap = '4px';
+        actions.className = 'row-nowrap';
 
         const btnRename = document.createElement('button');
         btnRename.type = 'button';
@@ -846,29 +878,34 @@
         foot.className = 'queue-foot';
 
         const badge = document.createElement('span');
-        badge.className = 'mono-tag';
+        badge.className = 'queue-badge';
         badge.textContent = `第 ${idx + 1} 頁`;
 
         const btns = document.createElement('div');
-        btns.className = 'row';
-        btns.style.gap = '3px';
+        btns.className = 'queue-actions';
 
         const up = document.createElement('button');
-        up.type = 'button'; up.className = 'btn btn-xs'; up.textContent = '↑'; up.disabled = idx === 0;
+        up.type = 'button'; up.className = 'queue-btn'; up.disabled = idx === 0;
+        up.title = '往前移一頁'; up.setAttribute('aria-label', '往前移一頁');
+        up.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>`;
         up.addEventListener('click', () => {
           [pendingQueue[idx - 1], pendingQueue[idx]] = [pendingQueue[idx], pendingQueue[idx - 1]];
           renderMultiQueue();
         });
 
         const down = document.createElement('button');
-        down.type = 'button'; down.className = 'btn btn-xs'; down.textContent = '↓'; down.disabled = idx === pendingQueue.length - 1;
+        down.type = 'button'; down.className = 'queue-btn'; down.disabled = idx === pendingQueue.length - 1;
+        down.title = '往後移一頁'; down.setAttribute('aria-label', '往後移一頁');
+        down.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>`;
         down.addEventListener('click', () => {
           [pendingQueue[idx + 1], pendingQueue[idx]] = [pendingQueue[idx], pendingQueue[idx + 1]];
           renderMultiQueue();
         });
 
         const del = document.createElement('button');
-        del.type = 'button'; del.className = 'btn btn-xs'; del.textContent = '✕';
+        del.type = 'button'; del.className = 'queue-btn queue-btn-del';
+        del.title = '移除此頁'; del.setAttribute('aria-label', '移除此頁');
+        del.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
         del.addEventListener('click', () => {
           const [removed] = pendingQueue.splice(idx, 1);
           try { URL.revokeObjectURL(removed.url); } catch {}
@@ -947,13 +984,15 @@
             rangeBtn.classList.toggle('has-start', picking && hasStart);
             rangeBtn.classList.toggle('active', active && !picking);
             if (picking) {
-              rangeBtn.innerHTML = hasStart ? RANGE_SVG_PICK_END : RANGE_SVG_PICK_START;
-              const label = hasStart ? '請點選終點音符' : '請點選起點音符';
+              rangeBtn.innerHTML = RANGE_SVG_DRAG;
+              const label = hasStart ? '拖曳至終點音符後放開即可完成選段' : '請於樂譜按住起點並拖曳至終點';
               rangeBtn.title = label;
               rangeBtn.setAttribute('aria-label', label);
             } else {
               rangeBtn.innerHTML = RANGE_SVG_IDLE;
-              const label = active ? '選段反覆中（點擊可重新選段）' : '選段：點選起點與終點（電腦支援滑鼠框選）';
+              const label = active
+                ? '選段反覆中（長按起點拖曳或點此鍵重新選段）'
+                : '選段：長按起點拖曳至終點（或點擊此鍵後直接拖曳）';
               rangeBtn.title = label;
               rangeBtn.setAttribute('aria-label', label);
             }
