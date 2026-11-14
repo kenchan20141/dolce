@@ -268,6 +268,7 @@ export interface MountShellOptions {
 let _appPromise: Promise<App> | null = null;
 let _app: App | null = null;
 let _scorePane: HTMLElement | null = null;
+let _progressEl: HTMLInputElement | null = null;
 let _onZoomChange: ((z: number) => void) | undefined;
 let _onRangeChange: MountShellOptions["onRangeChange"];
 let _loadGen = 0;
@@ -531,7 +532,7 @@ function clientRectToSvgRoot(
   return { minX, minY, maxX, maxY };
 }
 
-// ---- 播放游標偵測 ＋ 簡譜延音橫線（-）與連續休止符（0）動態游標推進 ＋ 換行防截斷守護 ----
+// ---- 播放游標偵測 ＋ 簡譜延音橫線（—）與連續休止符（0）動態游標推進 ＋ 換行防截斷守護 ----
 interface Box2D {
   minX: number;
   minY: number;
@@ -554,6 +555,8 @@ let _sustainState: {
   noteDur: number;
   totalWindowSec: number;
   lastCursorLeft: number;
+  lastCursorTop: number;
+  lastProgressVal: number;
   matchedSvg: SVGSVGElement;
   origBox: Box2D;
   origStyle: {
@@ -567,6 +570,16 @@ let _sustainState: {
   restTargets: CursorTarget[];
 } | null = null;
 
+function isSustainDashText(s: string): boolean {
+  const t = s.trim();
+  return t === "-" || t === "–" || t === "—" || t === "−" || t === "\u2015" || t === "\u2500";
+}
+
+function isRestZeroText(s: string): boolean {
+  const t = s.trim();
+  return t === "0" || t === "0·" || t === "0.";
+}
+
 function findOfficialPlaybackCursor(scorePane: HTMLElement): { el: HTMLElement | SVGElement; rect: DOMRect } | null {
   for (const page of scorePane.querySelectorAll<HTMLElement>(".score-page-wrap")) {
     for (const el of page.querySelectorAll<HTMLElement | SVGElement>("[class*='cursor' i], [class*='playhead' i]")) {
@@ -578,7 +591,8 @@ function findOfficialPlaybackCursor(scorePane: HTMLElement): { el: HTMLElement |
         continue;
       }
       const st = getComputedStyle(el);
-      if (st.display === "none" || st.visibility === "hidden" || st.opacity === "0") continue;
+      if (st.display === "none" || st.visibility === "hidden") continue;
+      if (st.opacity === "0" && el !== _hiddenCursorEl) continue;
       const r = el.getBoundingClientRect();
       if (r.width > 0 && r.height >= 12) return { el, rect: r };
     }
@@ -591,14 +605,16 @@ function findOfficialPlaybackCursor(scorePane: HTMLElement): { el: HTMLElement |
         continue;
       }
       const st = getComputedStyle(rect);
-      if (st.display === "none" || st.visibility === "hidden" || st.opacity === "0") continue;
+      if (st.display === "none" || st.visibility === "hidden") continue;
+      if (st.opacity === "0" && rect !== _hiddenCursorEl) continue;
       if (!isOrangeCursorColor(st.stroke) && !isOrangeCursorColor(st.fill)) continue;
       const r = rect.getBoundingClientRect();
       if (r.width > 1 && r.width <= 60 && r.height >= 16) return { el: rect, rect: r };
     }
     for (const div of page.querySelectorAll<HTMLElement>("div")) {
       const st = getComputedStyle(div);
-      if (st.display === "none" || st.visibility === "hidden" || st.opacity === "0") continue;
+      if (st.display === "none" || st.visibility === "hidden") continue;
+      if (st.opacity === "0" && div !== _hiddenCursorEl) continue;
       if (!isOrangeCursorColor(st.borderColor) && !isOrangeCursorColor(st.backgroundColor)) continue;
       const r = div.getBoundingClientRect();
       if (r.width > 1 && r.width <= 60 && r.height >= 16) return { el: div, rect: r };
@@ -616,21 +632,54 @@ function cleanupSustainCursor(scorePane?: HTMLElement | null) {
   _sustainState = null;
 }
 
+/** 取得簡譜音符核心數字的垂直中心與高度（避免高低八度點或減時線拉偏基準） */
+function getNoteCoreMetrics(
+  el: SVGGraphicsElement,
+  invSvgCtm: DOMMatrix,
+  fallbackBox: Box2D,
+): { midY: number; height: number } {
+  const texts = el.querySelectorAll<SVGTextElement>("text");
+  let bestBox: Box2D | null = null;
+  let bestH = 0;
+
+  for (const t of texts) {
+    const str = (t.textContent || "").trim();
+    if (!/^[1-7xX0]/.test(str)) continue;
+    const b = unionBoxInSvgRoot(t, invSvgCtm, null);
+    if (!b) continue;
+    const h = b.maxY - b.minY;
+    if (h > bestH) {
+      bestH = h;
+      bestBox = b;
+    }
+  }
+
+  if (bestBox && bestH >= 6) {
+    return { midY: (bestBox.minY + bestBox.maxY) * 0.5, height: bestH };
+  }
+  return {
+    midY: (fallbackBox.minY + fallbackBox.maxY) * 0.5,
+    height: Math.max(12, fallbackBox.maxY - fallbackBox.minY),
+  };
+}
+
 function findSustainBoxesForNote(
   svg: SVGSVGElement,
   invSvgCtm: DOMMatrix,
   noteId: ElementId,
   noteBox: Box2D,
+  coreMidY: number,
+  coreH: number,
 ): Box2D[] {
   if (!_app) return [];
 
-  const noteMidY = (noteBox.minY + noteBox.maxY) * 0.5;
-  const noteH = Math.max(16, noteBox.maxY - noteBox.minY);
-  const rowTol = Math.max(24, noteH * 0.95);
+  const rowTol = Math.max(22, coreH * 1.15);
+  const dashVerticalTol = Math.max(11, coreH * 0.6);
 
   const sameIdSustains: Box2D[] = [];
   const nearbySustains: Box2D[] = [];
-  let nextNoteMinX = Infinity;
+  const sustainEls = new Set<Element>();
+  let nextBoundaryMinX = Infinity;
 
   for (const g of svg.querySelectorAll<SVGGElement>("g")) {
     const entry = _app.syncView.entryAt(g);
@@ -638,16 +687,17 @@ function findSustainBoxesForNote(
     const b = unionBoxInSvgRoot(g, invSvgCtm, null);
     if (!b) continue;
     const midY = (b.minY + b.maxY) * 0.5;
-    if (Math.abs(midY - noteMidY) > rowTol) continue;
+    if (Math.abs(midY - coreMidY) > rowTol) continue;
 
-    if (entry.kind === "note" && entry.id !== noteId) {
-      if (b.minX > noteBox.maxX - 2 && b.minX < nextNoteMinX) {
-        nextNoteMinX = b.minX;
+    if ((entry.kind === "note" && entry.id !== noteId) || (entry.kind as string) === "rest") {
+      if (b.minX > noteBox.maxX - 2 && b.minX < nextBoundaryMinX) {
+        nextBoundaryMinX = b.minX;
       }
       continue;
     }
 
     if (entry.kind === "sustain") {
+      sustainEls.add(g);
       if (entry.id === noteId) {
         sameIdSustains.push(b);
       } else if (b.minX > noteBox.maxX - 4) {
@@ -656,24 +706,89 @@ function findSustainBoxesForNote(
     }
   }
 
+  // 檢查非 <g> 葉節點上是否直接標記為 sustain（如 <text> / <line> / <rect> / <path>）
+  for (const el of svg.querySelectorAll<SVGGraphicsElement>("text, line, rect, path")) {
+    if (el.closest(".sl-ab-band, .sl-ab-marker, .sl-sustain-cursor")) continue;
+    let covered = false;
+    for (const sg of sustainEls) {
+      if (sg.contains(el)) { covered = true; break; }
+    }
+    if (covered) continue;
+
+    const entry = _app.syncView.entryAt(el);
+    if (!entry || entry.kind !== "sustain") continue;
+    const b = unionBoxInSvgRoot(el, invSvgCtm, null);
+    if (!b) continue;
+    const midY = (b.minY + b.maxY) * 0.5;
+    if (Math.abs(midY - coreMidY) > rowTol) continue;
+
+    if (entry.id === noteId) {
+      sameIdSustains.push(b);
+    } else if (b.minX > noteBox.maxX - 4) {
+      nearbySustains.push(b);
+    }
+  }
+
+  // 若遇到單獨的 "0" 休止符文字，也作為邊界截斷（避免跨過空拍抓到後續延音）
+  for (const txt of svg.querySelectorAll<SVGTextElement>("text")) {
+    if (!isRestZeroText(txt.textContent || "")) continue;
+    const entry = _app.syncView.entryAt(txt);
+    if (entry && entry.kind === "lyric") continue;
+    const b = unionBoxInSvgRoot(txt, invSvgCtm, null);
+    if (!b) continue;
+    const midY = (b.minY + b.maxY) * 0.5;
+    if (Math.abs(midY - coreMidY) <= rowTol && b.minX > noteBox.maxX - 2 && b.minX < nextBoundaryMinX) {
+      nextBoundaryMinX = b.minX;
+    }
+  }
+
   let chosen =
     sameIdSustains.length > 0
       ? sameIdSustains
-      : nearbySustains.filter((b) => b.maxX <= nextNoteMinX + 4);
+      : nearbySustains.filter((b) => b.maxX <= nextBoundaryMinX + 4);
 
+  // 後備 1：尋找同列中文字形態的「— / -」延音符號
   if (chosen.length === 0) {
     const dashTexts: Box2D[] = [];
     for (const txt of svg.querySelectorAll<SVGTextElement>("text")) {
-      const content = (txt.textContent || "").trim();
-      if (content !== "-" && content !== "–" && content !== "—" && content !== "−") continue;
+      if (!isSustainDashText(txt.textContent || "")) continue;
+      const entry = _app.syncView.entryAt(txt);
+      if (entry && entry.kind === "lyric") continue;
       const b = unionBoxInSvgRoot(txt, invSvgCtm, null);
       if (!b) continue;
       const midY = (b.minY + b.maxY) * 0.5;
-      if (Math.abs(midY - noteMidY) <= rowTol && b.minX > noteBox.maxX - 2 && b.maxX <= nextNoteMinX + 4) {
+      if (Math.abs(midY - coreMidY) <= dashVerticalTol && b.minX > noteBox.maxX - 2 && b.maxX <= nextBoundaryMinX + 4) {
         dashTexts.push(b);
       }
     }
     chosen = dashTexts;
+  }
+
+  // 後備 2：尋找同列中以 SVG <line>/<rect>/<path> 繪製的水平延音線「—」
+  if (chosen.length === 0) {
+    const dashShapes: Box2D[] = [];
+    for (const shape of svg.querySelectorAll<SVGGraphicsElement>("line, rect, path")) {
+      if (shape.closest(".sl-ab-band, .sl-ab-marker, .sl-sustain-cursor")) continue;
+      if (isProtectedCursorEl(shape)) continue;
+      const entry = _app.syncView.entryAt(shape);
+      if (entry && (entry.kind === "note" || entry.kind === "lyric" || (entry.kind as string) === "rest")) continue;
+      const b = unionBoxInSvgRoot(shape, invSvgCtm, null);
+      if (!b) continue;
+      const bw = b.maxX - b.minX;
+      const bh = b.maxY - b.minY;
+      const midY = (b.minY + b.maxY) * 0.5;
+      if (
+        bw >= 4 &&
+        bw <= 36 &&
+        bh <= 5.5 &&
+        Math.abs(midY - coreMidY) <= dashVerticalTol &&
+        b.minX > noteBox.maxX - 1 &&
+        b.maxX <= nextBoundaryMinX + 2
+      ) {
+        dashShapes.push(b);
+      }
+    }
+    chosen = dashShapes;
   }
 
   chosen.sort((a, b) => a.minX - b.minX);
@@ -687,6 +802,8 @@ function findFollowingRestTargets(
   noteId: ElementId,
   noteSvg: SVGSVGElement,
   noteBox: Box2D,
+  coreMidY: number,
+  coreH: number,
   noteSpan: { from: number; to: number },
   pass: number,
 ): { targets: CursorTarget[]; nextNoteStart: number | null } {
@@ -696,11 +813,10 @@ function findFollowingRestTargets(
   const noteSvgIdx = svgs.indexOf(noteSvg);
   if (noteSvgIdx < 0) return { targets: [], nextNoteStart: null };
 
-  const noteMidY = (noteBox.minY + noteBox.maxY) * 0.5;
-  const noteH = Math.max(16, noteBox.maxY - noteBox.minY);
-  const rowTol = Math.max(24, noteH * 0.95);
+  const rowTol = Math.max(22, coreH * 1.15);
+  const minRestH = Math.max(6, coreH * 0.45);
 
-  let nextNote: { t: number; svgIdx: number; box: Box2D } | null = null;
+  let nextNote: { t: number; svgIdx: number; box: Box2D; midY: number } | null = null;
   const seenNoteIds = new Set<ElementId>();
 
   for (let sIdx = noteSvgIdx; sIdx < svgs.length; sIdx++) {
@@ -718,7 +834,8 @@ function findFollowingRestTargets(
       if (nextNote && t >= nextNote.t) continue;
       const b = unionBoxInSvgRoot(g, inv, null);
       if (!b) continue;
-      nextNote = { t, svgIdx: sIdx, box: b };
+      const m = getNoteCoreMetrics(g, inv, b);
+      nextNote = { t, svgIdx: sIdx, box: b, midY: m.midY };
     }
   }
 
@@ -730,7 +847,7 @@ function findFollowingRestTargets(
   }
 
   const collected: (CursorTarget & { svgIdx: number; rowOrder: number })[] = [];
-  const nextMidY = nextNote ? (nextNote.box.minY + nextNote.box.maxY) * 0.5 : Infinity;
+  const nextMidY = nextNote ? nextNote.midY : Infinity;
 
   for (let sIdx = noteSvgIdx; sIdx <= maxSvgIdx; sIdx++) {
     const svg = svgs[sIdx]!;
@@ -752,19 +869,19 @@ function findFollowingRestTargets(
 
     for (const txt of svg.querySelectorAll<SVGTextElement>("text")) {
       if (coveredTexts.has(txt)) continue;
-      if ((txt.textContent || "").trim() !== "0") continue;
+      if (!isRestZeroText(txt.textContent || "")) continue;
       const entry = _app.syncView.entryAt(txt);
       if (entry && (entry.kind === "lyric" || entry.kind === "note")) continue;
       const b = unionBoxInSvgRoot(txt, inv, null);
       if (!b) continue;
-      if (b.maxY - b.minY < noteH * 0.35) continue;
+      if (b.maxY - b.minY < minRestH) continue;
       candidateBoxes.push({ box: b, restId: entry?.id ?? null });
     }
 
     for (const cand of candidateBoxes) {
       const b = cand.box;
       const midY = (b.minY + b.maxY) * 0.5;
-      const onStartRow = sIdx === noteSvgIdx && Math.abs(midY - noteMidY) <= rowTol;
+      const onStartRow = sIdx === noteSvgIdx && Math.abs(midY - coreMidY) <= rowTol;
       const onEndRow = nextNote !== null && sIdx === nextNote.svgIdx && Math.abs(midY - nextMidY) <= rowTol;
 
       if (onStartRow && onEndRow) {
@@ -774,7 +891,7 @@ function findFollowingRestTargets(
       } else if (onEndRow) {
         if (b.maxX > nextNote!.box.minX + 4) continue;
       } else {
-        if (sIdx === noteSvgIdx && midY <= noteMidY + rowTol) continue;
+        if (sIdx === noteSvgIdx && midY <= coreMidY + rowTol) continue;
         if (nextNote && sIdx === nextNote.svgIdx && midY >= nextMidY - rowTol) continue;
         if (!nextNote && sIdx > noteSvgIdx) continue;
       }
@@ -830,7 +947,7 @@ function renderGhostCursor(
   const origH = Math.max(12, origBox.maxY - origBox.minY);
   const origMidY = (origBox.minY + origBox.maxY) * 0.5;
   const targetMidY = (target.box.minY + target.box.maxY) * 0.5;
-  const sameLineAsOrig = target.svg === matchedSvg && Math.abs(targetMidY - origMidY) <= 24;
+  const sameLineAsOrig = target.svg === matchedSvg && Math.abs(targetMidY - origMidY) <= Math.max(24, origH * 0.7);
 
   const targetW = Math.max(origW * 0.9, target.box.maxX - target.box.minX + 12);
   const cx = (target.box.minX + target.box.maxX) * 0.5;
@@ -914,8 +1031,8 @@ function updateSustainCursor(
   if (!cursor) {
     if (_sustainState && _sustainState.restTargets.length > 0) {
       const elapsedSec = (nowMs - _sustainState.enterMs) / 1000;
-      if (elapsedSec <= _sustainState.totalWindowSec + 0.08) {
-        return stepCachedTargets(scorePane, null, elapsedSec);
+      if (elapsedSec <= _sustainState.totalWindowSec + 0.45) {
+        return stepCachedTargets(scorePane, null, Math.min(elapsedSec, _sustainState.totalWindowSec));
       }
     }
     cleanupSustainCursor(scorePane);
@@ -938,12 +1055,17 @@ function updateSustainCursor(
 
   let matchedId: ElementId | null = null;
   let matchedBox: Box2D | null = null;
+  let matchedEl: SVGGraphicsElement | null = null;
+  let matchedKind: "note" | "other" = "note";
   let bestScore = Infinity;
   const curCenterX = (cursor.rect.left + cursor.rect.right) * 0.5;
+  const curCenterY = (cursor.rect.top + cursor.rect.bottom) * 0.5;
 
   for (const g of svg.querySelectorAll<SVGGElement>("g")) {
     const entry = _app.syncView.entryAt(g);
-    if (!entry || entry.kind !== "note") continue;
+    if (!entry) continue;
+    const kind = entry.kind as string;
+    if (kind !== "note" && kind !== "rest" && kind !== "sustain") continue;
     const gr = g.getBoundingClientRect();
     if (gr.width <= 0 && gr.height <= 0) continue;
     if (
@@ -954,30 +1076,79 @@ function updateSustainCursor(
     ) {
       continue;
     }
-    const dist = Math.abs((gr.left + gr.right) * 0.5 - curCenterX);
+    const dist =
+      Math.abs((gr.left + gr.right) * 0.5 - curCenterX) +
+      Math.abs((gr.top + gr.bottom) * 0.5 - curCenterY) * 0.25;
     if (dist < bestScore) {
       const box = unionBoxInSvgRoot(g, invSvgCtm, null);
       if (box) {
         bestScore = dist;
-        matchedId = entry.id;
-        matchedBox = box;
+        if (kind === "note") {
+          matchedKind = "note";
+          matchedId = entry.id;
+          matchedBox = box;
+          matchedEl = g;
+        } else {
+          matchedKind = "other";
+          matchedId = null;
+          matchedBox = null;
+          matchedEl = null;
+        }
       }
     }
   }
 
-  if (matchedId === null || !matchedBox) {
+  // 若官方游標本身已經直接位於「—」或「0」上，立刻恢復官方游標顯示即可
+  if (matchedKind !== "note") {
+    cleanupSustainCursor(scorePane);
+    return null;
+  }
+
+  // 若未命中 <g>，檢查是否正落在獨立的「0」休止符或「—」文字上
+  if (matchedId === null) {
+    for (const txt of svg.querySelectorAll<SVGTextElement>("text")) {
+      const content = txt.textContent || "";
+      if (!isRestZeroText(content) && !isSustainDashText(content)) continue;
+      const tr = txt.getBoundingClientRect();
+      if (
+        tr.right >= cursor.rect.left - 4 &&
+        tr.left <= cursor.rect.right + 4 &&
+        tr.bottom >= cursor.rect.top - 4 &&
+        tr.top <= cursor.rect.bottom + 4
+      ) {
+        cleanupSustainCursor(scorePane);
+        return null;
+      }
+    }
+    cleanupSustainCursor(scorePane);
+    return null;
+  }
+
+  if (!matchedBox || !matchedEl) {
     cleanupSustainCursor(scorePane);
     return null;
   }
 
   const pageIdx = Array.from(scorePane.querySelectorAll(".score-page-wrap")).indexOf(page ?? svg);
   const noteKey = `${pageIdx}:${matchedId}`;
+  const curProgress = _progressEl ? Number(_progressEl.value) : 0;
+
+  const isSameCursorSpot =
+    _sustainState !== null &&
+    _sustainState.key === noteKey &&
+    Math.abs(cursor.rect.left - _sustainState.lastCursorLeft) <= 6 &&
+    Math.abs(cursor.rect.top - _sustainState.lastCursorTop) <= 6;
+
+  const progressRewound =
+    _sustainState !== null &&
+    _progressEl !== null &&
+    curProgress < _sustainState.lastProgressVal - 0.005;
 
   const needRebuild =
-    !_sustainState ||
-    _sustainState.key !== noteKey ||
-    Math.abs(cursor.rect.left - _sustainState.lastCursorLeft) > 8 ||
-    (nowMs - _sustainState.enterMs) / 1000 > _sustainState.totalWindowSec + 0.15;
+    !isSameCursorSpot ||
+    progressRewound ||
+    (_sustainState !== null &&
+      (nowMs - _sustainState.enterMs) / 1000 > _sustainState.totalWindowSec + 0.85);
 
   if (needRebuild) {
     const info = getTimeline();
@@ -992,13 +1163,16 @@ function updateSustainCursor(
       return null;
     }
 
-    const sustainBoxes = findSustainBoxesForNote(svg, invSvgCtm, matchedId, matchedBox);
+    const core = getNoteCoreMetrics(matchedEl, invSvgCtm, matchedBox);
+    const sustainBoxes = findSustainBoxesForNote(svg, invSvgCtm, matchedId, matchedBox, core.midY, core.height);
     const { targets: restTargets, nextNoteStart } = findFollowingRestTargets(
       scorePane,
       info,
       matchedId,
       svg,
       matchedBox,
+      core.midY,
+      core.height,
       span,
       pass,
     );
@@ -1044,16 +1218,20 @@ function updateSustainCursor(
       noteDur,
       totalWindowSec: noteDur + restGap,
       lastCursorLeft: cursor.rect.left,
+      lastCursorTop: cursor.rect.top,
+      lastProgressVal: curProgress,
       matchedSvg: svg,
       origBox,
       origStyle,
       sustainTargets: sustainBoxes.map((box) => ({ svg, box })),
       restTargets,
     };
+  } else if (_sustainState) {
+    _sustainState.lastProgressVal = curProgress;
   }
 
   const elapsedSec = (nowMs - _sustainState!.enterMs) / 1000;
-  return stepCachedTargets(scorePane, cursor.el, elapsedSec);
+  return stepCachedTargets(scorePane, cursor.el, Math.min(elapsedSec, _sustainState!.totalWindowSec));
 }
 
 function startPlaybackScrollGuard(scorePane: HTMLElement): void {
@@ -1662,23 +1840,58 @@ function preserveIconButton(btn: HTMLButtonElement | null | undefined) {
   observer.observe(btn, { childList: true });
 }
 
+let _preloadScheduled = false;
+function scheduleBackgroundPreload() {
+  if (_preloadScheduled) return;
+  _preloadScheduled = true;
+
+  const warmModules = () => {
+    void import("./omrkit/runtime.browser")
+      .then((m) => m.browserRuntime.prepare("det"))
+      .catch(() => {});
+    void import("./rasteromr/browser").catch(() => {});
+    void import("./staffomr/browser").catch(() => {});
+    void import("./outlineomr/browser").catch(() => {});
+  };
+
+  const ric = (window as Window & {
+    requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+  }).requestIdleCallback;
+
+  if (typeof ric === "function") {
+    ric(warmModules, { timeout: 600 });
+  } else {
+    setTimeout(warmModules, 80);
+  }
+}
+
 async function initEngine(opts: MountShellOptions): Promise<App> {
   _onZoomChange = opts.onZoomChange;
   _onRangeChange = opts.onRangeChange;
   _scorePane = opts.scorePane;
+  _progressEl = opts.progressEl ?? null;
   if (_app) return _app;
   if (_appPromise) return _appPromise;
 
   _appPromise = (async () => {
     initLang();
     setMeasureBackend(browserMeasure);
-    await registerBravura();
-    await ensureFontsReady([
-      { family: "Bravura", size: 40 },
-      { family: "Bravura Text", size: 20 },
-      { family: "Noto Serif TC", size: 28 },
-    ]);
-    const meta = await MetaData.shared();
+
+    // 啟動即並行預載 OMR Runtime、SMuFL 中繼資料與樂譜字型，縮短手機冷啟動時間
+    const runtimePrep = import("./omrkit/runtime.browser")
+      .then((m) => m.browserRuntime.prepare("det"))
+      .catch(() => {});
+
+    const fontsReady = registerBravura().then(() =>
+      ensureFontsReady([
+        { family: "Bravura", size: 40 },
+        { family: "Bravura Text", size: 20 },
+        { family: "Noto Serif TC", size: 28 },
+      ]),
+    );
+
+    const [meta] = await Promise.all([MetaData.shared(), fontsReady]);
+    void runtimePrep;
 
     const app = new App(meta, opts.scorePane);
     app.statusEl = opts.statusEl ?? null;
@@ -1769,7 +1982,7 @@ async function initEngine(opts: MountShellOptions): Promise<App> {
     });
     paneObserver.observe(opts.scorePane, { childList: true, subtree: true });
 
-    void import("./omrkit/runtime.browser").then((m) => m.browserRuntime.prepare("det")).catch(() => {});
+    scheduleBackgroundPreload();
 
     _app = app;
     return app;
