@@ -337,8 +337,8 @@
     #sl-app .u2-inner { display: inline-flex; align-items: center; gap: 4px; border-bottom: 2px solid var(--sl-text); padding-bottom: 2px; }
     #sl-app .j-ev { position: relative; display: inline-flex; align-items: center; line-height: 1.05; transition: color 0.05s, transform 0.05s; }
     #sl-app .j-ev.j-rest { color: var(--sl-muted); }
-    #sl-app .j-ev.active-note { color: var(--sl-sage) !important; transform: translateY(-2px) scale(1.18); }
-    #sl-app .j-dash { font-weight: 700; margin-left: 3px; color: var(--sl-muted); font-size: 0.88em; }
+    #sl-app .j-ev.active-note, #sl-app .j-ev .active-note { color: var(--sl-sage) !important; transform: translateY(-2px) scale(1.18); display: inline-block; }
+    #sl-app .j-dash { font-weight: 700; margin-left: 3px; color: var(--sl-muted); font-size: 0.88em; transition: color 0.05s, transform 0.05s; }
     #sl-app .j-dot { font-weight: 900; margin-left: 1px; }
     #sl-app .triplet { position: relative; display: inline-flex; align-items: center; }
     #sl-app .triplet::before { content: "3"; position: absolute; top: -18px; left: 50%; transform: translateX(-50%); font-size: 10px; font-weight: 700; color: var(--sl-slate); line-height: 1; }
@@ -1261,7 +1261,7 @@
       function walk(tok) {
         if (tok.t === 'n') { const idx = events.length; events.push({ start: cursor, dur: tok.dur, type: 'note', midis: [60] }); cursor += tok.dur; return `<span class="j-ev" data-bar="${barIdx}" data-v="0" data-ev="${idx}">${ch}</span>`; }
         if (tok.t === 'r') { const idx = events.length; events.push({ start: cursor, dur: tok.dur, type: 'rest' }); cursor += tok.dur; return `<span class="j-ev j-rest" data-bar="${barIdx}" data-v="0" data-ev="${idx}">0</span>`; }
-        if (tok.t === 'half') { const idx = events.length; events.push({ start: cursor, dur: 2, type: 'note', midis: [60] }); cursor += 2; return `<span class="j-ev" data-bar="${barIdx}" data-v="0" data-ev="${idx}">${ch}<span class="j-dash">-</span></span>`; }
+        if (tok.t === 'half') { const idx = events.length; events.push({ start: cursor, dur: 2, type: 'note', midis: [60], hasDash: true }); cursor += 2; return `<span class="j-ev" data-bar="${barIdx}" data-v="0" data-ev="${idx}" data-half="1"><span class="j-main">${ch}</span><span class="j-dash">-</span></span>`; }
         if (tok.t === 'dotQ') { const idx = events.length; events.push({ start: cursor, dur: 1.5, type: 'note', midis: [60] }); cursor += 1.5; return `<span class="j-ev" data-bar="${barIdx}" data-v="0" data-ev="${idx}">${ch}<span class="j-dot">·</span></span>`; }
         if (tok.t === 'dot8') { const idx = events.length; events.push({ start: cursor, dur: 0.75, type: 'note', midis: [60] }); cursor += 0.75; return `<span class="j-ev" data-bar="${barIdx}" data-v="0" data-ev="${idx}">${ch}<span class="j-dot">·</span></span>`; }
         if (tok.t === 'u1') return `<span class="u1">${tok.items.map(walk).join('')}</span>`;
@@ -1419,7 +1419,7 @@
       activeAudioNodes = [];
       document.querySelectorAll('#beatDots .led').forEach(l => l.classList.remove('countin', 'playing'));
       document.getElementById('beatStatus').textContent = '就緒';
-      document.querySelectorAll('.j-ev.active-note, .s-ev.active-note').forEach(el => el.classList.remove('active-note'));
+      document.querySelectorAll('.j-ev.active-note, .j-ev .active-note, .s-ev.active-note').forEach(el => el.classList.remove('active-note'));
       document.querySelectorAll('.playing-card').forEach(el => el.classList.remove('playing-card'));
     }
     function playQuizPattern(pat, cardEl = null, containerEl = null) {
@@ -1474,10 +1474,16 @@
           document.getElementById('beatStatus').textContent = `第${Math.min(4, b + 1)}拍`;
           if (cardEl) cardEl.classList.add('playing-card');
           if (containerEl) {
-            containerEl.querySelectorAll('.j-ev.active-note, .s-ev.active-note').forEach(el => el.classList.remove('active-note'));
+            containerEl.querySelectorAll('.j-ev.active-note, .j-ev .active-note, .s-ev.active-note').forEach(el => el.classList.remove('active-note'));
             compiled.events.forEach((ev, evIdx) => {
               if (eb >= ev.start - 0.02 && eb < ev.start + ev.dur - 0.02) {
-                containerEl.querySelector(`[data-ev="${evIdx}"]`)?.classList.add('active-note');
+                const el = containerEl.querySelector(`[data-ev="${evIdx}"]`);
+                if (el?.dataset?.half === '1') {
+                  const sub = eb >= ev.start + 0.98 ? '.j-dash' : '.j-main';
+                  el.querySelector(sub)?.classList.add('active-note');
+                } else {
+                  el?.classList.add('active-note');
+                }
               }
             });
           }
