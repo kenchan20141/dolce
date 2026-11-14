@@ -1,4 +1,3 @@
-
 import "./styles.css";
 import { MetaData } from "./smufl/smufl";
 import { setMeasureBackend } from "./common/measure";
@@ -34,15 +33,46 @@ async function registerBravura() {
   for (const f of faces) (document.fonts as FontFaceSet).add(f);
 }
 
+/** 快速抽樣判斷是否已是乾淨白底數位樂譜，若是則免跑逐像素光影運算 */
+function isAlreadyCleanWhiteBg(data: Uint8ClampedArray, w: number, h: number): boolean {
+  const stepX = Math.max(1, Math.floor(w / 36));
+  const stepY = Math.max(1, Math.floor(h / 36));
+  let total = 0;
+  let brightWhite = 0;
+  let dimGrayBg = 0;
+
+  for (let y = 0; y < h; y += stepY) {
+    const rowOff = y * w;
+    for (let x = 0; x < w; x += stepX) {
+      const p = (rowOff + x) * 4;
+      const a = data[p + 3]!;
+      const alpha = a < 250 ? a / 255 : 1;
+      const r = data[p]! * alpha + 255 * (1 - alpha);
+      const g = data[p + 1]! * alpha + 255 * (1 - alpha);
+      const b = data[p + 2]! * alpha + 255 * (1 - alpha);
+      const lum = (77 * r + 150 * g + 29 * b + 128) >> 8;
+      total++;
+      if (lum >= 244) brightWhite++;
+      else if (lum >= 120 && lum < 238) dimGrayBg++;
+    }
+  }
+  return total > 0 && brightWhite / total >= 0.82 && dimGrayBg / total <= 0.08;
+}
+
 /**
  * 將手拍照片或過大圖檔做「尺寸上限控管」＋「陰影光影去除」＋「白底黑字高對比強化」：
  * 1. 限制最大長邊與總像素上限，避免超高畫素照片拖慢辨識，同時保留譜線與符頭辨識精度。
- * 2. 透過局部網格 85 分位數估測紙張底色亮度並雙線性內插，消除手拍陰影、折痕與燈光不均。
- * 3. 進行黑白分明拉伸（紙張壓為純白 #FFFFFF，譜線與符號壓為銳利純黑 #000000），並以無損 PNG 輸出。
+ * 2. 若偵測到陰影／偏暗紙張，透過局部網格估測紙張底色並雙線性內插，將底色壓為純白 #FFFFFF、符號壓為純黑 #000000。
+ * 3. 以高畫質 JPEG 輸出，讓 PDF 封裝與 OMR 引擎以最快速度處理。
  */
-function enhanceScoreContrast(ctx: CanvasRenderingContext2D, w: number, h: number): void {
+function enhanceScoreContrast(ctx: CanvasRenderingContext2D, w: number, h: number): boolean {
   const imgData = ctx.getImageData(0, 0, w, h);
   const data = imgData.data;
+
+  if (isAlreadyCleanWhiteBg(data, w, h)) {
+    return false;
+  }
+
   const n = w * h;
   const lum = new Uint8Array(n);
 
@@ -160,6 +190,7 @@ function enhanceScoreContrast(ctx: CanvasRenderingContext2D, w: number, h: numbe
   }
 
   ctx.putImageData(imgData, 0, 0);
+  return true;
 }
 
 async function maybeOptimizeImage(file: File): Promise<{ bytes: Uint8Array; mime?: string }> {
@@ -194,15 +225,20 @@ async function maybeOptimizeImage(file: File): Promise<{ bytes: Uint8Array; mime
       ctx.imageSmoothingQuality = "high";
       ctx.drawImage(bmp, 0, 0, w, h);
 
-      enhanceScoreContrast(ctx, w, h);
+      const modified = enhanceScoreContrast(ctx, w, h);
+      if (!modified && scale >= 0.999) {
+        return { bytes: raw, mime };
+      }
 
+      const jpgBlob = await new Promise<Blob | null>((r) => cv.toBlob(r, "image/jpeg", 0.93));
+      if (jpgBlob) {
+        return { bytes: new Uint8Array(await jpgBlob.arrayBuffer()), mime: "image/jpeg" };
+      }
       const pngBlob = await new Promise<Blob | null>((r) => cv.toBlob(r, "image/png"));
       if (pngBlob) {
         return { bytes: new Uint8Array(await pngBlob.arrayBuffer()), mime: "image/png" };
       }
-      const jpgBlob = await new Promise<Blob | null>((r) => cv.toBlob(r, "image/jpeg", 0.92));
-      if (!jpgBlob) return { bytes: raw, mime };
-      return { bytes: new Uint8Array(await jpgBlob.arrayBuffer()), mime: "image/jpeg" };
+      return { bytes: raw, mime };
     } finally {
       bmp.close();
     }
@@ -320,7 +356,6 @@ function parseRgbColor(colorStr: string | null | undefined): [number, number, nu
   return [Number(m[1]), Number(m[2]), Number(m[3]), m[4] !== undefined ? Number(m[4]) : 1];
 }
 
-/** 僅匹配粉紅／深紅診斷色（g 與 b 相近或 b 偏高），絕對排除橙色（g 明顯大於 b） */
 function isPinkDiagnosticColor(colorStr: string | null | undefined): boolean {
   const c = parseRgbColor(colorStr);
   if (!c || c[3] <= 0.01) return false;
@@ -328,7 +363,6 @@ function isPinkDiagnosticColor(colorStr: string | null | undefined): boolean {
   return r >= 165 && r - g >= 45 && g <= b + 28;
 }
 
-/** 匹配橙色動態播放游標（紅偏高、綠明顯高於藍） */
 function isOrangeCursorColor(colorStr: string | null | undefined): boolean {
   const c = parseRgbColor(colorStr);
   if (!c || c[3] <= 0.01) return false;
@@ -342,15 +376,12 @@ function isProtectedCursorEl(el: Element): boolean {
     return true;
   }
   const st = getComputedStyle(el);
-  if (
+  return (
     isOrangeCursorColor(st.stroke) ||
     isOrangeCursorColor(st.fill) ||
     isOrangeCursorColor(st.borderColor) ||
     isOrangeCursorColor(st.backgroundColor)
-  ) {
-    return true;
-  }
-  return false;
+  );
 }
 
 function hideDiagnosticOverlays(scorePane: HTMLElement): void {
@@ -365,46 +396,50 @@ function hideDiagnosticOverlays(scorePane: HTMLElement): void {
         ) {
           continue;
         }
+        const attrDash = rect.getAttribute("stroke-dasharray");
+        const attrStroke = rect.getAttribute("stroke");
+        const attrFill = rect.getAttribute("fill");
+        if (!attrDash && !rect.getAttribute("class")) continue;
         if (isProtectedCursorEl(rect)) continue;
         const st = getComputedStyle(rect);
-        const dash = rect.getAttribute("stroke-dasharray") || st.strokeDasharray;
-        const hasDash = Boolean(dash && dash !== "none");
-        if (!hasDash) continue;
-        const pinkStroke = isPinkDiagnosticColor(st.stroke) || isPinkDiagnosticColor(rect.getAttribute("stroke"));
-        const pinkFill = isPinkDiagnosticColor(st.fill) || isPinkDiagnosticColor(rect.getAttribute("fill"));
-        if (pinkStroke || pinkFill) {
+        const dash = attrDash || st.strokeDasharray;
+        if (!dash || dash === "none") continue;
+        if (
+          isPinkDiagnosticColor(attrStroke) ||
+          isPinkDiagnosticColor(st.stroke) ||
+          isPinkDiagnosticColor(attrFill) ||
+          isPinkDiagnosticColor(st.fill)
+        ) {
           rect.style.display = "none";
         }
       }
 
       for (const txt of svg.querySelectorAll<SVGTextElement>("text")) {
+        const content = (txt.textContent || "").trim();
+        if (!content) continue;
+        if (!(/^[+\-−]/.test(content) || /[♩♪♫♬𝅝𝅗𝅥𝅘𝅥𝅘𝅥𝅮𝅘𝅥𝅯]/.test(content) || content.length <= 6)) continue;
         if (isProtectedCursorEl(txt)) continue;
         const st = getComputedStyle(txt);
         const pink = isPinkDiagnosticColor(st.fill) || isPinkDiagnosticColor(txt.getAttribute("fill"));
         if (!pink) continue;
-        const content = (txt.textContent || "").trim();
-        if (/^[+\-−]/.test(content) || /[♩♪♫♬𝅝𝅗𝅥𝅘𝅥𝅘𝅥𝅮𝅘𝅥𝅯]/.test(content) || content.length <= 6) {
-          txt.style.display = "none";
-          const parentG = txt.parentElement;
-          if (parentG && parentG.tagName.toLowerCase() === "g" && parentG.children.length <= 4) {
-            for (const child of parentG.children) {
-              if (isProtectedCursorEl(child)) continue;
-              const cst = getComputedStyle(child);
-              if (isPinkDiagnosticColor(cst.fill) || isPinkDiagnosticColor(cst.stroke)) {
-                (child as SVGElement).style.display = "none";
-              }
+        txt.style.display = "none";
+        const parentG = txt.parentElement;
+        if (parentG && parentG.tagName.toLowerCase() === "g" && parentG.children.length <= 4) {
+          for (const child of parentG.children) {
+            if (isProtectedCursorEl(child)) continue;
+            const cst = getComputedStyle(child);
+            if (isPinkDiagnosticColor(cst.fill) || isPinkDiagnosticColor(cst.stroke)) {
+              (child as SVGElement).style.display = "none";
             }
           }
         }
       }
 
-      for (const g of svg.querySelectorAll<SVGGElement>("g")) {
-        if (isProtectedCursorEl(g)) continue;
+      for (const g of svg.querySelectorAll<SVGGElement>("g[class]")) {
         const cls = (g.getAttribute("class") || "").toLowerCase();
-        if (/(err|warn|mismatch|overfill|underfill|beat-diff|diag)/.test(cls)) {
-          const id = resolveNoteIdAt(g);
-          if (id === null) g.style.display = "none";
-        }
+        if (!/(err|warn|mismatch|overfill|underfill|beat-diff|diag)/.test(cls)) continue;
+        if (isProtectedCursorEl(g)) continue;
+        if (resolveNoteIdAt(g) === null) g.style.display = "none";
       }
     }
 
@@ -416,10 +451,12 @@ function hideDiagnosticOverlays(scorePane: HTMLElement): void {
       ) {
         continue;
       }
+      const badgeText = (el.textContent || "").trim();
+      const cls = (el.className || "").toString().toLowerCase();
+      if (!badgeText && !/(err|warn|mismatch|diag)/.test(cls)) continue;
       if (isProtectedCursorEl(el)) continue;
       const st = getComputedStyle(el);
       const dashedPink = st.borderStyle.includes("dashed") && isPinkDiagnosticColor(st.borderColor);
-      const badgeText = (el.textContent || "").trim();
       const pinkBadge =
         isPinkDiagnosticColor(st.color) && (/^[+\-−]/.test(badgeText) || /[♩♪♫𝅗𝅥𝅘𝅥𝅘𝅥𝅮]/.test(badgeText));
       if (dashedPink || pinkBadge) {
@@ -576,7 +613,7 @@ function findSustainBoxesForNote(
     const midY = (b.minY + b.maxY) * 0.5;
     if (Math.abs(midY - noteMidY) > rowTol) continue;
 
-    if ((entry.kind === "note" || entry.kind === "rest") && entry.id !== noteId) {
+    if (entry.kind === "note" && entry.id !== noteId) {
       if (b.minX > noteBox.maxX - 2 && b.minX < nextNoteMinX) {
         nextNoteMinX = b.minX;
       }
@@ -597,7 +634,6 @@ function findSustainBoxesForNote(
       ? sameIdSustains
       : nearbySustains.filter((b) => b.maxX <= nextNoteMinX + 4);
 
-  // 若 syncView 未將橫線標為 sustain，退而偵測同行中位於主音符與下一音符之間的 "-" 橫線
   if (chosen.length === 0) {
     const dashTexts: { minX: number; minY: number; maxX: number; maxY: number }[] = [];
     for (const txt of svg.querySelectorAll<SVGTextElement>("text")) {
@@ -640,7 +676,6 @@ function updateSustainCursor(
   if (!svgCtm) return null;
   const invSvgCtm = svgCtm.inverse();
 
-  // 找出游標當下所在的簡譜主音符（note）
   let matchedId: ElementId | null = null;
   let matchedBox: { minX: number; minY: number; maxX: number; maxY: number } | null = null;
   let bestScore = Infinity;
@@ -738,7 +773,6 @@ function updateSustainCursor(
   _hiddenCursorEl = cursor.el;
   cursor.el.style.opacity = "0";
 
-  // 清除其他頁殘留游標，只保留當下頁面上的 .sl-sustain-cursor
   for (const stale of scorePane.querySelectorAll(".sl-sustain-cursor")) {
     if (stale.parentNode !== svg) stale.remove();
   }
@@ -1406,7 +1440,6 @@ async function initEngine(opts: MountShellOptions): Promise<App> {
     app.stopPlayback();
     app.clearPages();
 
-    // 接管 loopPoints：有譜面直選 A-B 選段時，直接讓官方 PlaybackController 反覆播放該段
     const origLoopPoints = app.loopPoints.bind(app);
     app.loopPoints = () => (_abLoop ? { first: _abLoop.first, last: _abLoop.last } : origLoopPoints());
 
@@ -1453,15 +1486,31 @@ async function initEngine(opts: MountShellOptions): Promise<App> {
     notifyRange();
 
     let diagScheduled = false;
-    const paneObserver = new MutationObserver(() => {
-      if (!diagScheduled) {
+    const paneObserver = new MutationObserver((mutations) => {
+      let hasNewPageOrSvg = false;
+      for (const m of mutations) {
+        for (const node of m.addedNodes) {
+          if (!(node instanceof Element)) continue;
+          if (
+            node.classList.contains("score-page-wrap") ||
+            node.tagName.toLowerCase() === "svg" ||
+            node.querySelector(".score-page-wrap, svg")
+          ) {
+            hasNewPageOrSvg = true;
+            break;
+          }
+        }
+        if (hasNewPageOrSvg) break;
+      }
+
+      if (hasNewPageOrSvg && !diagScheduled) {
         diagScheduled = true;
         requestAnimationFrame(() => {
           diagScheduled = false;
           hideDiagnosticOverlays(opts.scorePane);
         });
       }
-      if (app.playback.busy) {
+      if (app.playback.busy && !_playbackGuardRaf) {
         startPlaybackScrollGuard(opts.scorePane);
       }
     });
@@ -1571,7 +1620,7 @@ async function recognizeAndRender(
     for (let i = 0; i < files.length; i++) {
       if (myGen !== _loadGen) return { engine: "cancelled", info: "" };
       const f = files[i]!;
-      onProgress(files.length > 1 ? `強化第 ${i + 1}/${files.length} 頁圖檔...` : "強化圖檔對比中...");
+      onProgress(files.length > 1 ? `最佳化第 ${i + 1}/${files.length} 頁圖檔...` : "最佳化圖檔中...");
       const isImg = /\.(png|jpe?g|webp)$/i.test(f.name) || f.type.startsWith("image/");
       const opt = isImg ? await maybeOptimizeImage(f) : { bytes: new Uint8Array(await f.arrayBuffer()), mime: f.type || undefined };
       rasterPdfs.push(await rb.asRasterPdf(opt.bytes, opt.mime));
