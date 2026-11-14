@@ -39,6 +39,8 @@ function isChromiumEngine(): boolean {
 function desiredThreads(): number {
   const ov = (globalThis as { __ortThreads?: number }).__ortThreads;
   if (typeof ov === "number") return Math.max(1, ov);
+  return 1; // 瀏覽器端強制純單執行緒，避免 worker 卡死導致整個 ort 全域單例掛掉
+}
   if (!(globalThis as { crossOriginIsolated?: boolean }).crossOriginIsolated) return 1;
   if (!isChromiumEngine()) return 1;
   const hw = (globalThis.navigator as { hardwareConcurrency?: number } | undefined)?.hardwareConcurrency ?? 4;
@@ -81,11 +83,11 @@ async function ensureRec(): Promise<void> {
   if (_initPromise) return _initPromise;
   _initPromise = (async () => {
     // 纯 wasm 构建（非 jsep/webgpu），只需 ort-wasm-simd-threaded.wasm，省去 26MB jsep。
-    const ort = await import("onnxruntime-web/wasm");
-    // 用 Vite 解析出的资源 URL 映射，避免 dev 下对 /public 的 .mjs 动态 import 报错。
+ const ort = await import("onnxruntime-web/wasm");
     ort.env.wasm.wasmPaths = { wasm: ortWasmUrl, mjs: ortMjsUrl };
+    ort.env.wasm.proxy = false;
     _ort = ort;
-    _session = await createRecSession(); // 多线程（带超时回退）/单线程
+    _session = await createRecSession();
   })();
   return _initPromise;
 }
