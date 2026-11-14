@@ -3,25 +3,37 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>SCORE LAB · 樂譜與簡譜識別</title>
+  <title>SCORE LAB · 樂譜工坊</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;600;700&display=swap" rel="stylesheet" crossorigin="anonymous" />
   <script type="module" src="/src/scorelab-omr.ts"></script>
   <style>
+    /* 無印良品 × 莫蘭迪日式色系 */
     :root {
-      --bg: #050507;
-      --surface: #0c0e13;
-      --surface-2: #131620;
-      --line: #1f2433;
-      --line-hi: #32394f;
-      --text: #f3f5f8;
-      --muted: #68738c;
-      --mint: #00e89d;
-      --mint-bg: rgba(0, 232, 157, 0.12);
-      --amber: #ffb020;
-      --amber-bg: rgba(255, 176, 32, 0.14);
-      --coral: #ff3b5c;
-      --coral-bg: rgba(255, 59, 92, 0.14);
-      --cyan: #38bdf8;
-      --mono: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
+      --bg: #f5f2ec;           /* 生成和紙底 */
+      --surface: #faf8f4;      /* 素白卡片 */
+      --surface-2: #efece4;    /* 淺亞麻底 */
+      --line: #ddd7cc;         /* 砂岩邊框 */
+      --line-hi: #c4bcb0;
+      --text: #2f2d2a;         /* 墨炭主字 */
+      --muted: #7a746b;        /* 枯灰副字 */
+
+      /* 三組工具視覺主題色（莫蘭迪色） */
+      --sage: #5b7a62;         /* 鼠尾草綠：播放控制 */
+      --sage-bg: #e9efe9;
+      --slate: #596e82;        /* 霧霾藍：譜面視圖 */
+      --slate-bg: #e9eef2;
+      --clay: #947460;         /* 暖陶米：頁面與匯出工具 */
+      --clay-bg: #f2ece7;
+      --rose: #b86b6b;         /* 枯玫瑰：我的最愛 */
+      --rose-bg: #f5e9e9;
+      --amber: #b88b4a;        /* 焦糖金：提醒 / 計時 */
+      --amber-bg: #f5efe3;
+      --coral: #b35c5c;        /* 磚紅：錯誤 */
+      --coral-bg: #f6eaea;
+
+      --serif: "Noto Serif TC", "PingFang TC", "Microsoft JhengHei", serif;
     }
 
     #sl-app, #sl-app * { box-sizing: border-box; }
@@ -34,216 +46,271 @@
       overflow-y: auto;
       background: var(--bg);
       color: var(--text);
-      font-family: "Inter", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif;
+      font-family: var(--serif);
       font-variant-numeric: tabular-nums;
+      -webkit-font-smoothing: antialiased;
     }
-    body.sl-body { padding: 14px 10px 72px; }
+    body.sl-body { padding: 18px 14px 64px; }
 
-    #sl-app.sl-app { max-width: 1120px; margin: 0 auto; }
+    #sl-app button, #sl-app select, #sl-app input {
+      font-family: var(--serif);
+    }
+
+    #sl-app.sl-app { max-width: 1080px; margin: 0 auto; }
 
     /* Topbar */
     #sl-app .topbar {
       display: flex; justify-content: space-between; align-items: center;
-      flex-wrap: wrap; gap: 10px; padding-bottom: 12px;
-      border-bottom: 1px solid var(--line); margin-bottom: 12px;
+      flex-wrap: wrap; gap: 12px; padding-bottom: 14px;
+      border-bottom: 1px solid var(--line); margin-bottom: 16px;
     }
-    #sl-app .brand { display: flex; align-items: center; gap: 8px; }
-    #sl-app .brand-sq { width: 10px; height: 10px; background: var(--mint); }
-    #sl-app .brand h1 { margin: 0; font-size: 0.9rem; letter-spacing: 0.22em; font-weight: 800; color: var(--text); }
-    #sl-app .mono-tag { font-family: var(--mono); font-size: 0.7rem; color: var(--muted); border: 1px solid var(--line); padding: 2px 7px; }
+    #sl-app .brand { display: flex; align-items: center; gap: 10px; }
+    #sl-app .brand-sq { width: 10px; height: 10px; border-radius: 2px; background: var(--sage); }
+    #sl-app .brand h1 { margin: 0; font-size: 1.02rem; letter-spacing: 0.18em; font-weight: 700; color: var(--text); }
+    #sl-app .top-actions { display: flex; align-items: center; gap: 10px; }
 
-    #sl-app .tabs { display: flex; gap: 2px; background: var(--surface); border: 1px solid var(--line); padding: 3px; }
-    #sl-app .tab-btn { border: none; background: transparent; color: var(--muted); padding: 6px 12px; font-size: 0.78rem; font-weight: 700; cursor: pointer; }
-    #sl-app .tab-btn.active { background: var(--text); color: var(--bg); }
+    #sl-app .mono-tag {
+      font-size: 0.76rem; color: var(--muted); background: var(--surface-2);
+      border: 1px solid var(--line); border-radius: 6px; padding: 4px 9px;
+    }
 
-    /* Panels & Controls */
-    #sl-app .panel { background: var(--surface); border: 1px solid var(--line); padding: 12px; margin-bottom: 10px; }
-    #sl-app .row { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+    #sl-app .tabs {
+      display: flex; gap: 3px; background: var(--surface-2);
+      border: 1px solid var(--line); border-radius: 8px; padding: 3px;
+    }
+    #sl-app .tab-btn {
+      border: none; background: transparent; color: var(--muted);
+      padding: 6px 14px; font-size: 0.84rem; font-weight: 600; cursor: pointer;
+      border-radius: 6px; transition: background 0.15s, color 0.15s;
+    }
+    #sl-app .tab-btn.active { background: var(--surface); color: var(--text); box-shadow: 0 1px 3px rgba(47,45,42,0.08); }
+
+    /* Panels */
+    #sl-app .panel {
+      background: var(--surface); border: 1px solid var(--line);
+      border-radius: 10px; padding: 16px; margin-bottom: 14px;
+      box-shadow: 0 2px 10px rgba(47, 45, 42, 0.03);
+    }
+    #sl-app .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
     #sl-app .between { justify-content: space-between; }
 
+    /* Controls */
     #sl-app .ctrl-pill {
-      display: inline-flex; align-items: center; gap: 7px;
+      display: inline-flex; align-items: center; gap: 8px;
       background: var(--surface-2); border: 1px solid var(--line);
-      padding: 4px 9px; font-family: var(--mono); font-size: 0.76rem;
+      border-radius: 6px; padding: 5px 10px; font-size: 0.8rem;
     }
-    #sl-app input[type="range"] { width: 70px; accent-color: var(--mint); cursor: pointer; }
-    #sl-app select { background: var(--surface-2); color: var(--text); border: 1px solid var(--line); padding: 5px 8px; font-size: 0.76rem; font-weight: 700; outline: none; cursor: pointer; }
+    #sl-app input[type="range"] { width: 80px; accent-color: var(--sage); cursor: pointer; }
+    #sl-app select {
+      background: var(--surface); color: var(--text); border: 1px solid var(--line-hi);
+      border-radius: 6px; padding: 6px 10px; font-size: 0.82rem; font-weight: 600;
+      outline: none; cursor: pointer;
+    }
 
     #sl-app .toggle {
-      display: inline-flex; align-items: center; gap: 5px;
-      background: var(--surface-2); border: 1px solid var(--line);
-      padding: 5px 9px; font-size: 0.74rem; font-weight: 700; color: var(--muted); cursor: pointer; user-select: none;
+      display: inline-flex; align-items: center; gap: 6px;
+      background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px;
+      padding: 6px 10px; font-size: 0.8rem; font-weight: 600; color: var(--muted); cursor: pointer; user-select: none;
     }
     #sl-app .toggle input { display: none; }
-    #sl-app .toggle .dot { width: 6px; height: 6px; background: #333a4d; }
-    #sl-app .toggle.on { color: var(--text); border-color: var(--line-hi); }
-    #sl-app .toggle.on .dot { background: var(--mint); box-shadow: 0 0 8px var(--mint); }
+    #sl-app .toggle .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--line-hi); }
+    #sl-app .toggle.on { color: var(--sage); border-color: var(--sage); background: var(--sage-bg); }
+    #sl-app .toggle.on .dot { background: var(--sage); }
 
+    /* 按鍵基礎樣式 */
     #sl-app .btn {
-      border: 1px solid var(--line-hi); background: var(--surface-2); color: var(--text);
-      padding: 6px 11px; font-size: 0.76rem; font-weight: 700; cursor: pointer;
-      display: inline-flex; align-items: center; justify-content: center; gap: 5px; border-radius: 0;
+      border: 1px solid var(--line-hi); background: var(--surface); color: var(--text);
+      padding: 7px 13px; font-size: 0.82rem; font-weight: 600; cursor: pointer;
+      display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+      border-radius: 6px; transition: all 0.15s ease;
     }
-    #sl-app .btn:hover:not(:disabled) { border-color: var(--text); }
-    #sl-app .btn:disabled { opacity: 0.35; cursor: not-allowed; }
-    #sl-app .btn.active { background: var(--mint); color: #04120c; border-color: var(--mint); }
-    #sl-app .btn-mint { background: var(--mint); color: #04120c; border-color: var(--mint); }
-    #sl-app .btn-xs { padding: 4px 8px; font-size: 0.7rem; }
+    #sl-app .btn:hover:not(:disabled) { filter: brightness(0.96); }
+    #sl-app .btn:disabled { opacity: 0.38; cursor: not-allowed; }
+    #sl-app .btn-xs { padding: 5px 11px; font-size: 0.78rem; }
+    #sl-app .btn-primary { background: var(--sage); color: #fff; border-color: var(--sage); }
 
-    /* 純 SVG 圖示按鈕（我的最愛等） */
-    #sl-app .btn-icon {
-      padding: 5px 7px;
-      min-width: 28px;
-      min-height: 26px;
-      line-height: 1;
+    /* 工具列三行色彩主題區分 */
+    #sl-app .toolbar-stack {
+      display: flex; flex-direction: column; gap: 8px;
+      margin-bottom: 12px;
     }
-    #sl-app .btn-icon svg {
-      width: 15px;
-      height: 15px;
-      display: block;
+    #sl-app .toolbar-row {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+      padding: 9px 12px; border-radius: 8px; border: 1px solid var(--line);
     }
-    #sl-app .btn-icon.fav-saved {
-      border-color: var(--coral);
-      color: var(--coral);
-      background: var(--coral-bg);
-    }
-    #sl-app .btn-icon.fav-open {
-      border-color: var(--amber);
-      color: var(--amber);
-      background: var(--amber-bg);
-    }
+    /* Row 1: 播放列（鼠尾草綠） */
+    #sl-app .row-play { background: var(--sage-bg); border-color: #cedad0; }
+    #sl-app .row-play .btn { border-color: #b7cbb9; color: #3a523f; background: #f8fbf8; }
+    #sl-app .row-play .btn-play-main { background: var(--sage); color: #fff; border-color: var(--sage); }
+    #sl-app .row-play .btn.active { background: var(--sage); color: #fff; border-color: var(--sage); }
+    #sl-app .row-play select { border-color: #b7cbb9; color: #3a523f; background: #f8fbf8; }
+    #sl-app .row-play .mono-tag { background: #f8fbf8; border-color: #b7cbb9; color: #3a523f; }
+    #sl-app .progress-wrap { display: inline-flex; align-items: center; gap: 8px; flex: 1; min-width: 190px; }
+    #sl-app .progress-wrap input[type="range"] { flex: 1; min-width: 90px; }
+
+    /* Row 2: 譜面視圖列（霧霾藍） */
+    #sl-app .row-view { background: var(--slate-bg); border-color: #ced7e0; }
+    #sl-app .row-view .btn { border-color: #b7c4d1; color: #3b4b5c; background: #f7fafc; }
+    #sl-app .row-view .btn.active { background: var(--slate); color: #fff; border-color: var(--slate); }
+
+    /* Row 3: 頁面與收藏工具列（暖陶米） */
+    #sl-app .row-tools { background: var(--clay-bg); border-color: #ded2c8; justify-content: space-between; }
+    #sl-app .row-tools .btn { border-color: #cbbab0; color: #5e4739; background: #fbf9f7; }
+    #sl-app .row-tools .btn-export { background: var(--clay); color: #fff; border-color: var(--clay); }
+
+    /* 純 SVG 圖示按鍵 */
+    #sl-app .btn-icon { padding: 6px 8px; min-width: 32px; min-height: 30px; line-height: 1; }
+    #sl-app .btn-icon svg { width: 16px; height: 16px; display: block; }
+    #sl-app .btn-fav { border-color: #d9bbbb !important; color: var(--rose) !important; background: #fdf9f9 !important; }
+    #sl-app .btn-fav.fav-saved { background: var(--rose) !important; color: #fff !important; border-color: var(--rose) !important; }
+    #sl-app .btn-fav-top.fav-open { background: var(--rose-bg) !important; border-color: var(--rose) !important; }
 
     #sl-app .playback-icon { display: inline-flex; align-items: center; width: 10px; height: 10px; }
     #sl-app .playback-icon svg { width: 10px; height: 10px; display: block; }
 
-    #sl-app .cat-row { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
-    #sl-app .cat-pill { border: 1px solid var(--line); background: transparent; color: var(--muted); padding: 3px 9px; font-size: 0.72rem; font-weight: 700; cursor: pointer; }
-    #sl-app .cat-pill.active { border-color: var(--mint); color: var(--mint); background: var(--mint-bg); }
+    #sl-app .cat-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+    #sl-app .cat-pill {
+      border: 1px solid var(--line); background: var(--surface-2); color: var(--muted);
+      border-radius: 6px; padding: 4px 10px; font-size: 0.76rem; font-weight: 600; cursor: pointer;
+    }
+    #sl-app .cat-pill.active { border-color: var(--sage); color: var(--sage); background: var(--sage-bg); }
 
     /* Beat Matrix */
-    #sl-app .beat-strip { display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 10px; }
-    #sl-app .beat-status { font-family: var(--mono); font-size: 0.7rem; color: var(--muted); min-width: 60px; text-align: right; }
-    #sl-app .leds { display: flex; gap: 5px; }
-    #sl-app .led { width: 24px; height: 3px; background: var(--surface-2); border: 1px solid var(--line); }
-    #sl-app .led.countin { background: var(--amber); border-color: var(--amber); }
-    #sl-app .led.playing { background: var(--mint); border-color: var(--mint); }
+    #sl-app .beat-strip { display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 12px; }
+    #sl-app .beat-status { font-size: 0.78rem; color: var(--muted); min-width: 48px; text-align: right; font-weight: 600; }
+    #sl-app .leds { display: flex; gap: 6px; }
+    #sl-app .led { width: 26px; height: 4px; border-radius: 2px; background: var(--line); }
+    #sl-app .led.countin { background: var(--amber); }
+    #sl-app .led.playing { background: var(--sage); }
 
     /* Quiz / Library */
-    #sl-app .grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+    #sl-app .grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
     @media (max-width: 680px) { #sl-app .grid-2 { grid-template-columns: 1fr; } }
 
     #sl-app .pad {
-      position: relative; background: var(--surface-2); border: 1px solid var(--line);
-      padding: 18px 10px 12px; min-height: 96px; display: flex; flex-direction: column;
+      position: relative; background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px;
+      padding: 20px 12px 14px; min-height: 98px; display: flex; flex-direction: column;
       align-items: center; justify-content: center; cursor: pointer; overflow-x: auto;
     }
-    #sl-app .pad:hover:not(.locked) { border-color: var(--text); }
-    #sl-app .pad.correct { border-color: var(--mint); background: var(--mint-bg); }
+    #sl-app .pad:hover:not(.locked) { border-color: var(--sage); }
+    #sl-app .pad.correct { border-color: var(--sage); background: var(--sage-bg); }
     #sl-app .pad.wrong { border-color: var(--coral); background: var(--coral-bg); }
-    #sl-app .pad.dimmed { opacity: 0.4; }
-    #sl-app .pad-idx { position: absolute; top: 6px; left: 8px; font-family: var(--mono); font-size: 0.68rem; color: var(--muted); }
-    #sl-app .pad-meta { margin-top: 6px; display: flex; align-items: center; gap: 8px; font-size: 0.74rem; color: var(--muted); font-weight: 700; }
+    #sl-app .pad.dimmed { opacity: 0.45; }
+    #sl-app .pad-idx { position: absolute; top: 8px; left: 10px; font-size: 0.72rem; color: var(--muted); font-weight: 700; }
+    #sl-app .pad-meta { margin-top: 8px; display: flex; align-items: center; gap: 8px; font-size: 0.8rem; color: var(--text); font-weight: 600; }
 
     #sl-app .result-strip {
-      margin-top: 10px; padding: 8px 12px; display: none;
-      align-items: center; justify-content: space-between; font-size: 0.8rem; font-weight: 700; border: 1px solid transparent;
+      margin-top: 12px; padding: 10px 14px; border-radius: 8px; display: none;
+      align-items: center; justify-content: space-between; font-size: 0.84rem; font-weight: 600; border: 1px solid transparent;
     }
     #sl-app .result-strip.show { display: flex; }
-    #sl-app .result-strip.ok { background: var(--mint-bg); border-color: var(--mint); color: var(--mint); }
+    #sl-app .result-strip.ok { background: var(--sage-bg); border-color: var(--sage); color: var(--sage); }
     #sl-app .result-strip.err { background: var(--coral-bg); border-color: var(--coral); color: var(--coral); }
 
-    #sl-app .lib-card { background: var(--surface-2); border: 1px solid var(--line); padding: 9px 11px; cursor: pointer; overflow-x: auto; }
-    #sl-app .playing-card { border-color: var(--mint) !important; box-shadow: inset 0 0 0 1px var(--mint); }
+    #sl-app .lib-card { background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; cursor: pointer; overflow-x: auto; }
+    #sl-app .playing-card { border-color: var(--sage) !important; box-shadow: inset 0 0 0 1px var(--sage); }
     #sl-app .card-top { display: flex; justify-content: space-between; align-items: center; gap: 6px; margin-bottom: 2px; }
-    #sl-app .tag { font-family: var(--mono); font-size: 0.64rem; padding: 1px 5px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
-    #sl-app .tag-sync { color: var(--amber); border-color: rgba(255,176,32,0.45); }
-    #sl-app .tag-dot { color: var(--cyan); border-color: rgba(56,189,248,0.45); }
-    #sl-app .tag-16 { color: #c084fc; border-color: rgba(192,132,252,0.45); }
-    #sl-app .tag-off { color: var(--coral); border-color: rgba(255,59,92,0.45); }
+    #sl-app .tag { font-size: 0.7rem; padding: 2px 7px; border-radius: 4px; border: 1px solid var(--line); color: var(--muted); background: var(--surface); white-space: nowrap; }
+    #sl-app .tag-sync { color: var(--amber); border-color: #dfd0b8; }
+    #sl-app .tag-dot { color: var(--slate); border-color: #c9d4de; }
+    #sl-app .tag-16 { color: var(--clay); border-color: #dfd0c4; }
+    #sl-app .tag-off { color: var(--coral); border-color: #dfc3c3; }
 
+    /* Dropzone */
     #sl-app .dropzone {
-      border: 1px dashed var(--line-hi); padding: 18px 12px; text-align: center;
-      cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 8px;
+      border: 1.5px dashed var(--line-hi); border-radius: 10px; padding: 18px 14px;
+      text-align: center; cursor: pointer; display: flex; flex-direction: column;
+      align-items: center; gap: 10px; background: var(--surface-2); transition: border-color 0.15s, background 0.15s;
     }
-    #sl-app .dropzone:hover, #sl-app .dropzone.dragover { border-color: var(--mint); background: var(--mint-bg); }
+    #sl-app .dropzone:hover, #sl-app .dropzone.dragover { border-color: var(--sage); background: var(--sage-bg); }
+    #sl-app .dropzone-title { font-weight: 700; font-size: 0.94rem; letter-spacing: 0.08em; color: var(--text); }
+
     #sl-app .omr-status-bar {
-      margin-top: 8px; padding: 8px 10px; background: var(--surface-2); border: 1px solid var(--line-hi);
-      font-family: var(--mono); font-size: 0.74rem; color: var(--cyan); display: flex; justify-content: space-between; align-items: center;
+      margin-top: 10px; padding: 9px 12px; border-radius: 8px;
+      background: var(--slate-bg); border: 1px solid #c9d4de;
+      font-size: 0.8rem; color: var(--slate); display: flex; justify-content: space-between; align-items: center; gap: 8px;
     }
-    #sl-app .omr-status-bar.err { color: var(--coral); border-color: var(--coral); background: var(--coral-bg); }
-    #sl-app .omr-status-bar.ok { color: var(--mint); border-color: var(--mint); background: var(--mint-bg); }
+    #sl-app .omr-status-bar.err { color: var(--coral); border-color: #dfc3c3; background: var(--coral-bg); }
 
     /* 多頁順序確認面板 */
     #sl-app .queue-panel {
-      margin-top: 10px; padding: 12px; background: var(--surface-2); border: 1px solid var(--amber);
+      margin-top: 12px; padding: 14px; border-radius: 8px;
+      background: var(--amber-bg); border: 1px solid #dfd0b8;
     }
     #sl-app .queue-grid {
-      display: grid; grid-template-columns: repeat(auto-fill, minmax(135px, 1fr)); gap: 10px; margin: 10px 0;
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 10px; margin: 12px 0 4px;
     }
     #sl-app .queue-item {
-      background: var(--surface); border: 1px solid var(--line-hi); padding: 6px;
+      background: var(--surface); border: 1px solid var(--line-hi); border-radius: 8px; padding: 6px;
       display: flex; flex-direction: column; gap: 6px; cursor: grab; user-select: none;
     }
-    #sl-app .queue-item.dragging { opacity: 0.4; border-color: var(--mint); }
-    #sl-app .queue-thumb {
-      width: 100%; height: 140px; object-fit: contain; background: #fff; display: block;
-    }
-    #sl-app .queue-foot {
-      display: flex; justify-content: space-between; align-items: center; gap: 4px;
-    }
+    #sl-app .queue-item.dragging { opacity: 0.45; border-color: var(--sage); }
+    #sl-app .queue-thumb { width: 100%; height: 136px; object-fit: contain; background: #fff; border-radius: 4px; display: block; }
+    #sl-app .queue-foot { display: flex; justify-content: space-between; align-items: center; gap: 4px; }
 
     /* 我的最愛清單面板 */
     #sl-app .fav-panel {
-      margin-top: 10px; padding: 12px; background: var(--surface-2); border: 1px solid var(--line-hi);
+      margin-top: 12px; padding: 14px; border-radius: 8px;
+      background: var(--rose-bg); border: 1px solid #e2cbcb;
     }
     #sl-app .fav-grid {
-      display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; margin-top: 8px;
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; margin-top: 10px;
     }
     #sl-app .fav-card {
-      background: var(--surface); border: 1px solid var(--line); padding: 9px 10px;
+      background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px;
       display: flex; justify-content: space-between; align-items: center; gap: 8px; cursor: pointer;
     }
-    #sl-app .fav-card:hover { border-color: var(--mint); }
-    #sl-app .fav-card.current { border-color: var(--mint); background: var(--mint-bg); }
+    #sl-app .fav-card:hover { border-color: var(--rose); }
+    #sl-app .fav-card.current { border-color: var(--sage); background: var(--sage-bg); }
     #sl-app .fav-info { min-width: 0; flex: 1; }
-    #sl-app .fav-title { font-size: 0.8rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    #sl-app .fav-sub { font-family: var(--mono); font-size: 0.66rem; color: var(--muted); margin-top: 3px; }
+    #sl-app .fav-title { font-size: 0.84rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #sl-app .fav-sub { font-size: 0.72rem; color: var(--muted); margin-top: 3px; }
 
-    /* Dolce 官方譜面外框 */
-    #sl-app .score-toolbar {
-      display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center;
-      gap: 8px; padding: 8px 10px; background: var(--surface-2); border: 1px solid var(--line);
-      margin-bottom: 10px;
-    }
+    /* 官方譜面畫布盒（莫蘭迪暖灰托盤） */
     #sl-app .sl-score-box {
-      height: 76vh; display: flex; flex-direction: column;
-      border: 1px solid var(--line); background: #141720; overflow: hidden;
+      height: 72vh; min-height: 420px; display: flex; flex-direction: column;
+      border: 1px solid var(--line); border-radius: 8px; background: #e8e3d9; overflow: hidden;
     }
     #sl-app #score-pane {
-      flex: 1; min-height: 0; overflow: auto; padding: 16px; background: #141720;
+      flex: 1; min-height: 0; overflow: auto; padding: 16px; background: #e8e3d9;
     }
 
     /* JIANPU NOTATION (測驗與圖鑑用) */
     #sl-app .jianpu-bar {
       display: inline-flex; align-items: center; flex-wrap: nowrap; gap: 12px;
-      font-family: "Times New Roman", "Noto Serif TC", Georgia, serif;
-      font-size: 21px; font-weight: 700; color: var(--text);
+      font-family: var(--serif); font-size: 21px; font-weight: 700; color: var(--text);
       padding: 26px 5px 34px; user-select: none;
     }
     #sl-app .jianpu-bar::before, #sl-app .jianpu-bar::after {
       content: ""; display: inline-block; width: 2px; height: 17px; background: var(--line-hi); align-self: center; flex-shrink: 0;
     }
     #sl-app .j-group-tight { display: inline-flex; align-items: center; gap: 4px; }
-    #sl-app .u1 { display: inline-flex; align-items: center; gap: 5px; border-bottom: 2px solid #cbd5e1; padding-bottom: 2px; }
-    #sl-app .u2-inner { display: inline-flex; align-items: center; gap: 4px; border-bottom: 2px solid #cbd5e1; padding-bottom: 2px; }
+    #sl-app .u1 { display: inline-flex; align-items: center; gap: 5px; border-bottom: 2px solid var(--text); padding-bottom: 2px; }
+    #sl-app .u2-inner { display: inline-flex; align-items: center; gap: 4px; border-bottom: 2px solid var(--text); padding-bottom: 2px; }
     #sl-app .j-ev { position: relative; display: inline-flex; align-items: center; line-height: 1.05; transition: color 0.05s, transform 0.05s; }
     #sl-app .j-ev.j-rest { color: var(--muted); }
-    #sl-app .j-ev.active-note { color: #ffffff !important; text-shadow: 0 0 12px var(--mint), 0 0 4px #fff; transform: translateY(-2px) scale(1.18); }
-    #sl-app .j-dash { font-family: system-ui, sans-serif; font-weight: 700; margin-left: 3px; color: var(--muted); font-size: 0.88em; }
+    #sl-app .j-ev.active-note { color: var(--sage) !important; transform: translateY(-2px) scale(1.18); }
+    #sl-app .j-dash { font-weight: 700; margin-left: 3px; color: var(--muted); font-size: 0.88em; }
     #sl-app .j-dot { font-weight: 900; margin-left: 1px; }
     #sl-app .triplet { position: relative; display: inline-flex; align-items: center; }
-    #sl-app .triplet::before { content: "3"; position: absolute; top: -18px; left: 50%; transform: translateX(-50%); font-family: var(--mono); font-size: 10px; font-weight: 800; color: var(--cyan); line-height: 1; }
-    #sl-app .triplet::after { content: ""; position: absolute; top: -7px; left: 1px; right: 1px; height: 4px; border-top: 1.5px solid var(--cyan); border-left: 1.5px solid var(--cyan); border-right: 1.5px solid var(--cyan); pointer-events: none; }
+    #sl-app .triplet::before { content: "3"; position: absolute; top: -18px; left: 50%; transform: translateX(-50%); font-size: 10px; font-weight: 700; color: var(--slate); line-height: 1; }
+    #sl-app .triplet::after { content: ""; position: absolute; top: -7px; left: 1px; right: 1px; height: 4px; border-top: 1.5px solid var(--slate); border-left: 1.5px solid var(--slate); border-right: 1.5px solid var(--slate); pointer-events: none; }
+
+    /* 響應式斷點（平板 / 手機） */
+    @media (max-width: 768px) {
+      body.sl-body { padding: 10px 8px 48px; }
+      #sl-app .panel { padding: 12px; }
+      #sl-app .toolbar-row { padding: 8px 10px; gap: 6px; }
+      #sl-app .sl-score-box { height: 64vh; min-height: 360px; }
+      #sl-app #score-pane { padding: 10px; }
+    }
+    @media (max-width: 480px) {
+      #sl-app .brand h1 { font-size: 0.9rem; letter-spacing: 0.12em; }
+      #sl-app .tab-btn { padding: 5px 10px; font-size: 0.78rem; }
+      #sl-app .btn-xs { padding: 5px 9px; font-size: 0.74rem; }
+      #sl-app .progress-wrap { min-width: 100%; order: 10; }
+      #sl-app .queue-grid { grid-template-columns: repeat(2, 1fr); }
+    }
 
     #sl-app .hidden { display: none !important; }
   </style>
@@ -256,9 +323,9 @@
         <h1>SCORE LAB</h1>
       </div>
 
-      <div class="row">
+      <div class="top-actions">
         <!-- 純 SVG 我的最愛清單按鍵 -->
-        <button class="btn btn-icon" id="myBtnFavList" type="button" title="我的最愛" aria-label="我的最愛">
+        <button class="btn btn-icon btn-fav btn-fav-top" id="myBtnFavList" type="button" title="我的最愛" aria-label="我的最愛">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
             <path d="M12 13.5l-2.6-2.4a1.6 1.6 0 0 1 2.2-2.3L12 9.2l.4-.4a1.6 1.6 0 0 1 2.2 2.3L12 13.5z" fill="currentColor" stroke="none"/>
@@ -273,13 +340,13 @@
       </div>
     </header>
 
-    <!-- 測驗 / 圖鑑專用 Transport -->
+    <!-- 測驗 / 圖鑑專用控制列 -->
     <section id="transportPanel" class="panel hidden">
       <div class="row between">
         <div class="row">
           <div class="ctrl-pill">
-            <span id="bpmVal" style="color:var(--mint); font-weight:800;">92</span>
-            <span>BPM</span>
+            <span id="bpmVal" style="color:var(--sage); font-weight:700;">92</span>
+            <span>拍速</span>
             <input type="range" id="bpmRange" min="45" max="180" value="92" />
           </div>
           <select id="soundSelect">
@@ -288,8 +355,8 @@
             <option value="wood">木魚</option>
           </select>
           <select id="symbolSelect">
-            <option value="1">數字 1</option>
-            <option value="X">節奏 X</option>
+            <option value="1">數字</option>
+            <option value="X">節奏</option>
           </select>
         </div>
 
@@ -301,9 +368,9 @@
       <div class="cat-row" id="catBar"></div>
     </section>
 
-    <!-- 測驗 / 圖鑑 Beat LEDs -->
+    <!-- 測驗 / 圖鑑節拍燈 -->
     <div id="beatStrip" class="beat-strip hidden">
-      <span class="beat-status" id="beatStatus">READY</span>
+      <span class="beat-status" id="beatStatus">就緒</span>
       <div class="leds" id="beatDots">
         <div class="led"></div><div class="led"></div><div class="led"></div><div class="led"></div>
       </div>
@@ -312,81 +379,90 @@
     <!-- 1. 樂譜區 -->
     <section id="analyzerSection" class="panel">
       <div class="dropzone" id="dropzone">
-        <div style="font-weight:800; font-size:0.88rem; letter-spacing:0.1em;">↑ 匯入樂譜（支援複選多張圖片或樂譜檔案）</div>
+        <div class="dropzone-title">匯入樂譜</div>
         <div class="row">
-          <select id="omrKindSelect" title="圖片/PDF 辨識模式">
-            <option value="auto">自動判別 (五線譜 / 簡譜)</option>
-            <option value="staff">強制辨識為：五線譜</option>
-            <option value="jianpu">強制辨識為：簡譜</option>
+          <select id="omrKindSelect" title="辨識類型">
+            <option value="auto">自動</option>
+            <option value="staff">五線譜</option>
+            <option value="jianpu">簡譜</option>
           </select>
-          <button class="btn btn-mint btn-xs" id="btnPickFile" type="button">選擇檔案</button>
+          <button class="btn btn-primary btn-xs" id="btnPickFile" type="button">選擇檔案</button>
           <button class="btn btn-xs" id="btnLoadDemo" type="button">載入範例</button>
         </div>
         <input type="file" id="scoreInput" multiple accept=".pdf,.png,.jpg,.jpeg,.webp,.xml,.musicxml,.abc,.123,.jcx,.jly,.jpwabc,.txt,.mid,.midi" class="hidden" />
       </div>
 
-      <!-- 多張圖片先後順序確認面板 -->
+      <!-- 多張圖片先後順序確認 -->
       <div id="multiQueuePanel" class="queue-panel hidden">
         <div class="row between">
-          <span style="font-size:0.8rem; font-weight:800; color:var(--amber);">請確認各頁圖片的先後次序（可拖曳或點 ↑ ↓ 調整）</span>
+          <span style="font-size:0.86rem; font-weight:700; color:var(--text);">確認頁面順序</span>
           <div class="row">
-            <button class="btn btn-mint btn-xs" id="btnConfirmOrder" type="button">▶ 確認順序並開始辨識</button>
+            <button class="btn btn-primary btn-xs" id="btnConfirmOrder" type="button">開始辨識</button>
             <button class="btn btn-xs" id="btnCancelOrder" type="button">取消</button>
           </div>
         </div>
         <div class="queue-grid" id="multiQueueGrid"></div>
       </div>
 
-      <!-- 我的最愛抽屜面板 -->
+      <!-- 我的最愛面板 -->
       <div id="favPanel" class="fav-panel hidden">
         <div class="row between">
-          <span class="mono-tag" style="color:var(--amber); border-color:var(--amber);">FAVORITES · 快速載入（免重跑 AI）</span>
-          <button class="btn btn-xs" id="btnCloseFav" type="button">✕</button>
+          <span style="font-size:0.86rem; font-weight:700; color:var(--rose);">我的最愛</span>
+          <button class="btn btn-xs" id="btnCloseFav" type="button">關閉</button>
         </div>
-        <div id="favEmptyHint" class="mono-tag" style="margin-top:8px; display:inline-block;">尚未收藏任何樂譜，載入樂譜後可按工具列愛心圖示加入</div>
+        <div id="favEmptyHint" style="font-size:0.78rem; color:var(--muted); margin-top:8px;">尚未收藏樂譜</div>
         <div class="fav-grid" id="favGrid"></div>
       </div>
 
+      <!-- 進度與錯誤提示（完成後自動隱藏） -->
       <div id="omrStatusBox" class="omr-status-bar hidden">
         <span id="omrStatusText">準備中...</span>
-        <button class="btn btn-xs hidden" id="btnRetryOmr" type="button">↻ 重新辨識</button>
+        <button class="btn btn-xs hidden" id="btnRetryOmr" type="button">重新辨識</button>
       </div>
 
-      <div id="analyzerOutput" class="hidden" style="margin-top:10px;">
-        <div class="score-toolbar">
-          <div class="row">
-            <button class="btn btn-mint btn-xs" id="myBtnPlay" type="button">
+      <!-- 樂譜主輸出區：三行色彩分組工具列 + 官方動態譜面 -->
+      <div id="analyzerOutput" class="hidden" style="margin-top:14px;">
+        <div class="toolbar-stack">
+          <!-- 第 1 行：播放控制（鼠尾草綠） -->
+          <div class="toolbar-row row-play">
+            <button class="btn btn-xs btn-play-main" id="myBtnPlay" type="button">
               <span class="playback-icon"></span>
               <span class="playback-label">播放</span>
             </button>
-            <button class="btn btn-xs" id="myBtnStop" type="button">■ 停止</button>
-            <input type="range" id="myProgress" style="width:130px;" />
-            <span class="mono-tag" id="myTime">0:00 / 0:00</span>
+            <button class="btn btn-xs" id="myBtnStop" type="button">停止</button>
+            <div class="progress-wrap">
+              <input type="range" id="myProgress" />
+              <span class="mono-tag" id="myTime">0:00 / 0:00</span>
+            </div>
             <select id="mySpeed"></select>
             <button class="btn btn-xs" id="myBtnLoop" type="button">循環</button>
             <button class="btn btn-xs" id="myBtnMetro" type="button">節拍</button>
           </div>
 
-          <div class="row">
-            <!-- 純 SVG 加入/移除我的最愛按鍵 -->
-            <button class="btn btn-icon" id="myBtnFavToggle" type="button" title="加入／移除我的最愛" aria-label="加入／移除我的最愛">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
-              </svg>
-            </button>
+          <!-- 第 2 行：譜面視圖（霧霾藍） -->
+          <div class="toolbar-row row-view" id="myViewSwitch">
+            <button class="btn btn-xs" id="myViewStaff" type="button">五線譜</button>
+            <button class="btn btn-xs" id="myViewMixed" type="button">混排</button>
+            <button class="btn btn-xs" id="myViewExpanded" type="button">簡譜</button>
+          </div>
 
-            <div class="row" id="myViewSwitch">
-              <button class="btn btn-xs" id="myViewStaff" type="button">五線譜</button>
-              <button class="btn btn-xs" id="myViewMixed" type="button">混排</button>
-              <button class="btn btn-xs" id="myViewOriginal" type="button">簡譜</button>
-              <button class="btn btn-xs" id="myViewExpanded" type="button">投影</button>
+          <!-- 第 3 行：頁面工具與收藏（暖陶米 + 枯玫瑰愛心） -->
+          <div class="toolbar-row row-tools">
+            <div class="row">
+              <button class="btn btn-xs" id="myBtnZoomOut" type="button">縮小</button>
+              <button class="btn btn-xs" id="myBtnZoomReset" type="button">100%</button>
+              <button class="btn btn-xs" id="myBtnZoomIn" type="button">放大</button>
+              <button class="btn btn-xs" id="myBtnPrevPage" type="button">上一頁</button>
+              <button class="btn btn-xs" id="myBtnNextPage" type="button">下一頁</button>
             </div>
-            <button class="btn btn-xs" id="myBtnZoomOut" type="button">－</button>
-            <button class="btn btn-xs" id="myBtnZoomReset" type="button">100%</button>
-            <button class="btn btn-xs" id="myBtnZoomIn" type="button">＋</button>
-            <button class="btn btn-xs" id="myBtnPrevPage" type="button">‹</button>
-            <button class="btn btn-xs" id="myBtnNextPage" type="button">›</button>
-            <button class="btn btn-xs" id="myBtnExportXml" type="button">↓ XML</button>
+            <div class="row">
+              <button class="btn btn-xs btn-export" id="myBtnExportXml" type="button">匯出樂譜</button>
+              <button class="btn btn-icon btn-fav" id="myBtnFavToggle" type="button" title="加入我的最愛" aria-label="加入我的最愛">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
+                </svg>
+              </button>
+            </div>
           </div>
         </div>
 
@@ -399,29 +475,29 @@
 
     <!-- 2. 測驗 -->
     <section id="quizSection" class="panel hidden">
-      <div class="row between" style="margin-bottom:10px;">
+      <div class="row between" style="margin-bottom:12px;">
         <div class="row">
-          <button class="btn btn-mint" id="btnPlayQuestion">▶ 播放</button>
-          <button class="btn" id="btnStopAudio">■</button>
-          <button class="btn" id="btnNextQuestion">⏭</button>
+          <button class="btn btn-primary" id="btnPlayQuestion">播放</button>
+          <button class="btn" id="btnStopAudio">停止</button>
+          <button class="btn" id="btnNextQuestion">換題</button>
         </div>
         <div class="row">
-          <span class="mono-tag"><b id="statCorrect">0</b>/<b id="statTotal">0</b></span>
-          <span class="mono-tag">×<b id="statStreak">0</b></span>
+          <span class="mono-tag">答對 <b id="statCorrect">0</b>/<b id="statTotal">0</b></span>
+          <span class="mono-tag">連勝 <b id="statStreak">0</b></span>
         </div>
       </div>
       <div class="grid-2" id="optionsGrid"></div>
       <div class="result-strip" id="feedbackBanner">
         <span id="feedbackText"></span>
-        <button class="btn btn-mint btn-xs" id="btnBannerNext">NEXT ➜</button>
+        <button class="btn btn-primary btn-xs" id="btnBannerNext">下一題</button>
       </div>
     </section>
 
     <!-- 3. 圖鑑 -->
     <section id="librarySection" class="panel hidden">
-      <div class="row between" style="margin-bottom:10px;">
-        <span class="mono-tag">PATTERNS</span>
-        <button class="btn btn-xs" id="btnLibStop">■</button>
+      <div class="row between" style="margin-bottom:12px;">
+        <span class="mono-tag">節奏圖鑑</span>
+        <button class="btn btn-xs" id="btnLibStop">停止</button>
       </div>
       <div class="grid-2" id="libraryList"></div>
     </section>
@@ -434,7 +510,7 @@
     const FAV_DB_NAME = 'scorelab_favorites_db';
     const FAV_STORE = 'scores';
     const FAV_META_LS = 'scorelab_favorites_meta_v1';
-    const VIEW_LABEL = { staff: '五線譜', mixed: '混排', original: '簡譜', expanded: '投影' };
+    const VIEW_LABEL = { staff: '五線譜', mixed: '混排', expanded: '簡譜', original: '簡譜' };
 
     function openFavDB() {
       return new Promise((resolve, reject) => {
@@ -544,7 +620,7 @@
         btnRename.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>`;
         btnRename.addEventListener('click', async (e) => {
           e.stopPropagation();
-          const next = prompt('修改最愛樂譜名稱：', item.title || '已儲存樂譜');
+          const next = prompt('修改樂譜名稱：', item.title || '已儲存樂譜');
           if (next && next.trim()) {
             item.title = next.trim();
             await putFavorite(item);
@@ -555,8 +631,8 @@
         const btnDel = document.createElement('button');
         btnDel.type = 'button';
         btnDel.className = 'btn btn-xs btn-icon';
-        btnDel.title = '移除最愛';
-        btnDel.setAttribute('aria-label', '移除最愛');
+        btnDel.title = '移除';
+        btnDel.setAttribute('aria-label', '移除');
         btnDel.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M6 6l1 14h10l1-14"/></svg>`;
         btnDel.addEventListener('click', async (e) => {
           e.stopPropagation();
@@ -569,7 +645,7 @@
         card.append(info, actions);
 
         card.addEventListener('click', async () => {
-          setOmrStatus('正在快速讀取最愛樂譜...');
+          hideOmrStatus();
           try {
             const eng = await ensureDolceEngine();
             await eng.loadSnapshot(item);
@@ -578,10 +654,9 @@
             document.getElementById('myBtnFavList').classList.remove('fav-open');
             await syncFavToggleButton();
             await renderFavoritesPanel();
-            setOmrStatus('✓ 已從我的最愛快速載入', 'ok');
           } catch (err) {
             console.error(err);
-            setOmrStatus(`✕ 讀取失敗：${err?.message || err}`, 'err');
+            setOmrStatus(`載入失敗：${err?.message || err}`, 'err');
           }
         });
 
@@ -590,12 +665,27 @@
     }
 
     // ==========================================
-    // 2. 樂譜區：串接官方 Dolce 核心引擎 + 多頁排序
+    // 2. 樂譜區：多頁順序確認 & 辨識引擎
     // ==========================================
     let lastOmrFiles = [];
-    let pendingQueue = []; // [{ file, url }]
+    let pendingQueue = [];
     let dragIndex = -1;
     let enginePromise = null;
+
+    function hideOmrStatus() {
+      document.getElementById('omrStatusBox').classList.add('hidden');
+      document.getElementById('btnRetryOmr').classList.add('hidden');
+    }
+
+    function setOmrStatus(msg, state = '') {
+      const box = document.getElementById('omrStatusBox');
+      const txt = document.getElementById('omrStatusText');
+      const retry = document.getElementById('btnRetryOmr');
+      box.className = `omr-status-bar ${state}`.trim();
+      txt.textContent = msg;
+      const isOmr = lastOmrFiles.length > 0 && lastOmrFiles.every(f => /\.(pdf|png|jpe?g|webp)$/i.test(f.name) || f.type.startsWith('image/'));
+      retry.classList.toggle('hidden', state !== 'err' || !isOmr);
+    }
 
     function clearPendingQueue() {
       pendingQueue.forEach(item => { try { URL.revokeObjectURL(item.url); } catch {} });
@@ -634,7 +724,6 @@
 
         const badge = document.createElement('span');
         badge.className = 'mono-tag';
-        badge.style.color = 'var(--mint)';
         badge.textContent = `第 ${idx + 1} 頁`;
 
         const btns = document.createElement('div');
@@ -698,16 +787,6 @@
       renderMultiQueue();
     }
 
-    function setOmrStatus(msg, state = '') {
-      const box = document.getElementById('omrStatusBox');
-      const txt = document.getElementById('omrStatusText');
-      const retry = document.getElementById('btnRetryOmr');
-      box.className = `omr-status-bar ${state}`.trim();
-      txt.textContent = msg;
-      const isOmr = lastOmrFiles.length > 0 && lastOmrFiles.every(f => /\.(pdf|png|jpe?g|webp)$/i.test(f.name) || f.type.startsWith('image/'));
-      retry.classList.toggle('hidden', !isOmr);
-    }
-
     function ensureDolceEngine() {
       if (enginePromise) return enginePromise;
       enginePromise = (async () => {
@@ -718,7 +797,6 @@
         const viewBtns = new Map([
           ['staff', document.getElementById('myViewStaff')],
           ['mixed', document.getElementById('myViewMixed')],
-          ['original', document.getElementById('myViewOriginal')],
           ['expanded', document.getElementById('myViewExpanded')],
         ]);
         await window.__dolceEngine.mount({
@@ -748,19 +826,19 @@
       const first = files[0];
       const name = first.name.toLowerCase();
       document.getElementById('analyzerOutput').classList.add('hidden');
-      setOmrStatus('正在初始化樂譜與 AI 引擎...');
+      setOmrStatus('初始化引擎中...');
       try {
         const eng = await ensureDolceEngine();
 
         if (files.length === 1 && (name.endsWith('.mid') || name.endsWith('.midi'))) {
-          setOmrStatus('正在解析 MIDI...');
+          setOmrStatus('讀取樂譜中...');
           const buf = await first.arrayBuffer();
           const parsed = parseMIDI(buf);
           const xml = exportScoreToMusicXML(parsed.trackViews[0].bars, parsed.bpm || 100);
           await eng.loadXmlText(xml, 'mixed');
           document.getElementById('analyzerOutput').classList.remove('hidden');
           await syncFavToggleButton();
-          setOmrStatus('✓ 已載入 MIDI 樂譜', 'ok');
+          hideOmrStatus();
           return;
         }
 
@@ -768,18 +846,22 @@
         const res = await eng.loadFiles(files, {
           kind,
           onProgress: (msg) => setOmrStatus(msg),
+          onFirstPageReady: () => {
+            document.getElementById('analyzerOutput').classList.remove('hidden');
+          },
         });
+        if (res.engine === 'cancelled') return;
         document.getElementById('analyzerOutput').classList.remove('hidden');
         await syncFavToggleButton();
-        setOmrStatus(`✓ 完成：${res.info}`, 'ok');
+        hideOmrStatus();
       } catch (err) {
         console.error(err);
         document.getElementById('analyzerOutput').classList.add('hidden');
-        setOmrStatus(`✕ 失敗：${err?.message || err}`, 'err');
+        setOmrStatus(`辨識失敗：${err?.message || err}`, 'err');
       }
     }
 
-    // MIDI -> MusicXML 轉換
+    // MIDI -> MusicXML
     function parseMIDI(arrayBuffer) {
       const dv = new DataView(arrayBuffer); let pos = 0;
       const readStr = (len) => { let s = ''; for (let i = 0; i < len; i++) s += String.fromCharCode(dv.getUint8(pos++)); return s; };
@@ -788,7 +870,7 @@
         while (pos < dv.byteLength) { const b = dv.getUint8(pos++); val = (val << 7) | (b & 0x7f); if ((b & 0x80) === 0) break; }
         return val;
       };
-      if (readStr(4) !== 'MThd') throw new Error('Invalid MIDI');
+      if (readStr(4) !== 'MThd') throw new Error('無效的 MIDI 格式');
       const hdrLen = dv.getUint32(pos); pos += 4; pos += 2;
       const numTracks = dv.getUint16(pos); pos += 2;
       const division = dv.getUint16(pos); pos += 2;
@@ -841,7 +923,7 @@
         pos = trkEnd;
         if (notes.length > 0) rawTracks.push({ short: `T${rawTracks.length + 1}`, notes });
       }
-      if (rawTracks.length === 0) throw new Error('MIDI 沒有音符');
+      if (rawTracks.length === 0) throw new Error('沒有偵測到音符');
       tempoMap.sort((a, b) => a.tick - b.tick); timeSigMap.sort((a, b) => a.tick - b.tick); keySigMap.sort((a, b) => a.tick - b.tick);
       const getAt = (arr, tick) => { let cur = arr[0]; for (const item of arr) { if (item.tick <= tick + 10) cur = item; else break; } return cur; };
 
@@ -948,7 +1030,7 @@
 
     const DEMO_MUSICXML = `<?xml version="1.0" encoding="UTF-8"?>
 <score-partwise version="3.1">
-  <part-list><score-part id="P1"><part-name>Demo</part-name></score-part></part-list>
+  <part-list><score-part id="P1"><part-name>範例曲</part-name></score-part></part-list>
   <part id="P1">
     <measure number="1">
       <attributes><divisions>4</divisions><key><fifths>0</fifths></key><time><beats>4</beats><beat-type>4</beat-type></time></attributes>
@@ -977,7 +1059,7 @@
     // ==========================================
     // 3. 測驗與圖鑑
     // ==========================================
-    const CATEGORIES = { basic: '基礎', syncopation: '切分', sixteenth: '16分', dotted: '附點', offbeat: '反拍' };
+    const CATEGORIES = { basic: '基礎', syncopation: '切分', sixteenth: '十六分', dotted: '附點', offbeat: '反拍' };
     const n = (dur) => ({ t: 'n', dur });
     const r = (dur) => ({ t: 'r', dur });
     const half = () => ({ t: 'half', dur: 2 });
@@ -990,21 +1072,21 @@
 
     const PATTERNS = [
       { id: 'b1', cat: 'basic', name: '四分基本', groups: [n(1), n(1), n(1), n(1)] },
-      { id: 'b2', cat: 'basic', name: '二分+四分', groups: [half(), n(1), n(1)] },
+      { id: 'b2', cat: 'basic', name: '二分加四分', groups: [half(), n(1), n(1)] },
       { id: 'b3', cat: 'basic', name: '前八後四', groups: [u1(n(0.5), n(0.5)), n(1), u1(n(0.5), n(0.5)), n(1)] },
       { id: 'b4', cat: 'basic', name: '前四後八', groups: [n(1), u1(n(0.5), n(0.5)), n(1), u1(n(0.5), n(0.5))] },
-      { id: 'b5', cat: 'basic', name: '八分+休止', groups: [u1(n(0.5), n(0.5)), u1(n(0.5), n(0.5)), n(1), r(1)] },
-      { id: 's1', cat: 'syncopation', name: '小切分(前)', groups: [sync(u1(n(0.5)), n(1), u1(n(0.5))), n(1), n(1)] },
-      { id: 's2', cat: 'syncopation', name: '小切分(後)', groups: [n(1), n(1), sync(u1(n(0.5)), n(1), u1(n(0.5)))] },
+      { id: 'b5', cat: 'basic', name: '八分加休止', groups: [u1(n(0.5), n(0.5)), u1(n(0.5), n(0.5)), n(1), r(1)] },
+      { id: 's1', cat: 'syncopation', name: '前小切分', groups: [sync(u1(n(0.5)), n(1), u1(n(0.5))), n(1), n(1)] },
+      { id: 's2', cat: 'syncopation', name: '後小切分', groups: [n(1), n(1), sync(u1(n(0.5)), n(1), u1(n(0.5)))] },
       { id: 's3', cat: 'syncopation', name: '雙小切分', groups: [sync(u1(n(0.5)), n(1), u1(n(0.5))), sync(u1(n(0.5)), n(1), u1(n(0.5)))] },
       { id: 's4', cat: 'syncopation', name: '置中小切分', groups: [n(1), sync(u1(n(0.5)), n(1), u1(n(0.5))), n(1)] },
       { id: 's5', cat: 'syncopation', name: '大切分', groups: [n(1), half(), n(1)] },
-      { id: 's6', cat: 'syncopation', name: '大切分+八分', groups: [n(1), half(), u1(n(0.5), n(0.5))] },
-      { id: 'x1', cat: 'sixteenth', name: '16分切分', groups: [n(1), u1(u2(n(0.25)), n(0.5), u2(n(0.25))), n(1), n(1)] },
-      { id: 'x2', cat: 'sixteenth', name: '雙16分切分', groups: [u1(u2(n(0.25)), n(0.5), u2(n(0.25))), n(1), u1(u2(n(0.25)), n(0.5), u2(n(0.25))), n(1)] },
-      { id: 'x3', cat: 'sixteenth', name: '前8後16', groups: [n(1), u1(n(0.5), u2(n(0.25), n(0.25))), n(1), u1(n(0.5), u2(n(0.25), n(0.25)))] },
-      { id: 'x4', cat: 'sixteenth', name: '前16後8', groups: [n(1), u1(u2(n(0.25), n(0.25)), n(0.5)), n(1), u1(u2(n(0.25), n(0.25)), n(0.5))] },
-      { id: 'x5', cat: 'sixteenth', name: '16分+切分', groups: [u1(u2(n(0.25), n(0.25), n(0.25), n(0.25))), sync(u1(n(0.5)), n(1), u1(n(0.5))), n(1)] },
+      { id: 's6', cat: 'syncopation', name: '大切分加八分', groups: [n(1), half(), u1(n(0.5), n(0.5))] },
+      { id: 'x1', cat: 'sixteenth', name: '十六分切分', groups: [n(1), u1(u2(n(0.25)), n(0.5), u2(n(0.25))), n(1), n(1)] },
+      { id: 'x2', cat: 'sixteenth', name: '雙十六分切分', groups: [u1(u2(n(0.25)), n(0.5), u2(n(0.25))), n(1), u1(u2(n(0.25)), n(0.5), u2(n(0.25))), n(1)] },
+      { id: 'x3', cat: 'sixteenth', name: '前八後十六', groups: [n(1), u1(n(0.5), u2(n(0.25), n(0.25))), n(1), u1(n(0.5), u2(n(0.25), n(0.25)))] },
+      { id: 'x4', cat: 'sixteenth', name: '前十六後八', groups: [n(1), u1(u2(n(0.25), n(0.25)), n(0.5)), n(1), u1(u2(n(0.25), n(0.25)), n(0.5))] },
+      { id: 'x5', cat: 'sixteenth', name: '十六分加切分', groups: [u1(u2(n(0.25), n(0.25), n(0.25), n(0.25))), sync(u1(n(0.5)), n(1), u1(n(0.5))), n(1)] },
       { id: 'd1', cat: 'dotted', name: '大附點', groups: [sync(dotQ(), u1(n(0.5))), n(1), n(1)] },
       { id: 'd2', cat: 'dotted', name: '雙大附點', groups: [sync(dotQ(), u1(n(0.5))), sync(dotQ(), u1(n(0.5)))] },
       { id: 'd3', cat: 'dotted', name: '反大附點', groups: [sync(u1(n(0.5)), dotQ()), n(1), n(1)] },
@@ -1014,7 +1096,7 @@
       { id: 'o2', cat: 'offbeat', name: '正反交替', groups: [n(1), u1(r(0.5), n(0.5)), n(1), u1(r(0.5), n(0.5))] },
       { id: 'o3', cat: 'offbeat', name: '反拍起手', groups: [u1(r(0.5), n(0.5)), n(1), u1(n(0.5), n(0.5)), n(1)] },
       { id: 'o4', cat: 'offbeat', name: '三連音', groups: [n(1), tri(), n(1), n(1)] },
-      { id: 'o5', cat: 'offbeat', name: '三連+八分', groups: [tri(), u1(n(0.5), n(0.5)), tri(), n(1)] }
+      { id: 'o5', cat: 'offbeat', name: '三連加八分', groups: [tri(), u1(n(0.5), n(0.5)), tri(), n(1)] }
     ];
 
     function compileBuiltIn(pattern, symMode = '1', barIdx = 0) {
@@ -1045,7 +1127,7 @@
       activeAudioNodes.forEach(node => { try { node.stop(); } catch {} try { node.disconnect(); } catch {} });
       activeAudioNodes = [];
       document.querySelectorAll('#beatDots .led').forEach(l => l.classList.remove('countin', 'playing'));
-      document.getElementById('beatStatus').textContent = 'READY';
+      document.getElementById('beatStatus').textContent = '就緒';
       document.querySelectorAll('.j-ev.active-note').forEach(el => el.classList.remove('active-note'));
       document.querySelectorAll('.playing-card').forEach(el => el.classList.remove('playing-card'));
     }
@@ -1094,11 +1176,11 @@
         if (now < barStart) {
           const b = Math.floor((now - startTime) / beatSec);
           if (b >= 0 && b < leds.length) leds[b].classList.add('countin');
-          document.getElementById('beatStatus').textContent = 'COUNT';
+          document.getElementById('beatStatus').textContent = '預拍';
         } else {
           const eb = (now - barStart) / beatSec, b = Math.floor(eb);
           if (b >= 0 && b < leds.length) leds[b].classList.add('playing');
-          document.getElementById('beatStatus').textContent = `B.${Math.min(4, b + 1)}`;
+          document.getElementById('beatStatus').textContent = `第${Math.min(4, b + 1)}拍`;
           if (cardEl) cardEl.classList.add('playing-card');
           if (containerEl) {
             containerEl.querySelectorAll('.j-ev.active-note').forEach(el => el.classList.remove('active-note'));
@@ -1146,7 +1228,7 @@
       if (!currentQuestion) return;
       const grid = document.getElementById('optionsGrid'), sym = document.getElementById('symbolSelect').value;
       grid.innerHTML = '';
-      ['A','B','C','D'].forEach((k, i) => {
+      ['甲','乙','丙','丁'].forEach((k, i) => {
         const opt = currentQuestion.options[i], card = document.createElement('div'); card.className = 'pad';
         card.innerHTML = `<span class="pad-idx">${k}</span><div class="opt-jianpu">${compileBuiltIn(opt, sym).html}</div><div class="pad-meta hidden"></div>`;
         card.addEventListener('click', () => handleQuizAnswer(opt));
@@ -1165,7 +1247,7 @@
         card.classList.add('locked');
         const opt = currentQuestion.options[i], meta = card.querySelector('.pad-meta');
         meta.classList.remove('hidden'); meta.innerHTML = `<span>${opt.name}</span>`;
-        const btn = document.createElement('button'); btn.className = 'btn btn-xs'; btn.textContent = '▶';
+        const btn = document.createElement('button'); btn.className = 'btn btn-xs'; btn.textContent = '試聽';
         btn.addEventListener('click', (e) => { e.stopPropagation(); playQuizPattern(opt, card, card.querySelector('.opt-jianpu')); });
         meta.appendChild(btn);
         if (opt.id === currentQuestion.target.id) card.classList.add('correct');
@@ -1174,7 +1256,7 @@
       });
       const banner = document.getElementById('feedbackBanner'), text = document.getElementById('feedbackText');
       banner.className = ok ? 'result-strip show ok' : 'result-strip show err';
-      text.textContent = ok ? `✓ ${currentQuestion.target.name}` : `× ${currentQuestion.target.name}`;
+      text.textContent = ok ? `答對：${currentQuestion.target.name}` : `正解：${currentQuestion.target.name}`;
     }
 
     function renderLibrary() {
@@ -1183,7 +1265,7 @@
       const tagClsMap = { syncopation: 'tag-sync', dotted: 'tag-dot', sixteenth: 'tag-16', offbeat: 'tag-off' };
       PATTERNS.filter(p => selectedCats.has(p.cat)).forEach(pat => {
         const card = document.createElement('div'); card.className = 'lib-card';
-        card.innerHTML = `<div class="card-top"><span style="font-size:0.8rem;font-weight:700;">${pat.name}</span><span class="tag ${tagClsMap[pat.cat]||''}">${CATEGORIES[pat.cat]}</span></div><div class="lib-jianpu">${compileBuiltIn(pat, sym).html}</div>`;
+        card.innerHTML = `<div class="card-top"><span style="font-size:0.84rem;font-weight:700;">${pat.name}</span><span class="tag ${tagClsMap[pat.cat]||''}">${CATEGORIES[pat.cat]}</span></div><div class="lib-jianpu">${compileBuiltIn(pat, sym).html}</div>`;
         card.addEventListener('click', () => playQuizPattern(pat, card, card.querySelector('.lib-jianpu')));
         list.appendChild(card);
       });
@@ -1215,7 +1297,6 @@
     document.getElementById('btnNextQuestion').addEventListener('click', () => generateQuestion(true));
     document.getElementById('btnBannerNext').addEventListener('click', () => generateQuestion(true));
 
-    // 檔案匯入 & 多頁順序確認
     const dropzone = document.getElementById('dropzone'), scoreInput = document.getElementById('scoreInput');
     document.getElementById('omrKindSelect').addEventListener('click', (e) => e.stopPropagation());
     document.getElementById('omrKindSelect').addEventListener('change', () => {
@@ -1239,7 +1320,7 @@
     });
     document.getElementById('btnCancelOrder').addEventListener('click', clearPendingQueue);
 
-    // 我的最愛 SVG 按鍵
+    // 我的最愛
     document.getElementById('myBtnFavList').addEventListener('click', async () => {
       const panel = document.getElementById('favPanel');
       const btn = document.getElementById('myBtnFavList');
@@ -1260,7 +1341,6 @@
       const existing = list.find(x => x.hash === hash);
       if (existing) {
         await deleteFavorite(existing.id);
-        setOmrStatus('已從我的最愛移除', 'ok');
       } else {
         await putFavorite({
           id: `fav_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
@@ -1271,7 +1351,6 @@
           viewMode: snap.viewMode,
           createdAt: Date.now(),
         });
-        setOmrStatus('✓ 已加入我的最愛（下次點書籤圖示可秒開）', 'ok');
       }
       await syncFavToggleButton();
       if (!document.getElementById('favPanel').classList.contains('hidden')) {
@@ -1279,8 +1358,7 @@
       }
     });
 
-    // 切換視圖時也同步我的最愛快照視圖狀態
-    ['myViewStaff', 'myViewMixed', 'myViewOriginal', 'myViewExpanded'].forEach(id => {
+    ['myViewStaff', 'myViewMixed', 'myViewExpanded'].forEach(id => {
       document.getElementById(id).addEventListener('click', () => setTimeout(() => void syncFavToggleButton(), 150));
     });
 
@@ -1289,17 +1367,17 @@
       lastOmrFiles = [];
       clearPendingQueue();
       document.getElementById('analyzerOutput').classList.add('hidden');
-      setOmrStatus('正在載入範例...');
+      setOmrStatus('載入中...');
       try {
         const eng = await ensureDolceEngine();
         await eng.loadXmlText(DEMO_MUSICXML, 'mixed');
         document.getElementById('analyzerOutput').classList.remove('hidden');
         await syncFavToggleButton();
-        setOmrStatus('✓ 已載入範例', 'ok');
+        hideOmrStatus();
       } catch (err) {
         console.error(err);
         document.getElementById('analyzerOutput').classList.add('hidden');
-        setOmrStatus(`✕ 載入範例失敗：${err?.message || err}`, 'err');
+        setOmrStatus(`載入失敗：${err?.message || err}`, 'err');
       }
     });
 
