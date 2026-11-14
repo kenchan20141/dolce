@@ -4,6 +4,7 @@ import { setMeasureBackend } from "./common/measure";
 import { browserMeasure, ensureFontsReady } from "./common/measure.browser";
 import { asset } from "./common/asset";
 import { App, type ViewMode } from "./editor/app";
+import type { DocFormatId } from "./editor/formats";
 import { SAMPLE } from "./editor/sample";
 import { initLang } from "./i18n";
 import { attachPinchZoom } from "./editor/pinchzoom";
@@ -12,6 +13,13 @@ import { recognizeMusicppDetailed, omrEmitter } from "./omr";
 import { scoreDocToMusicXml } from "./model/toxml";
 
 export type OmrKind = "auto" | "jianpu" | "staff";
+
+export interface ScoreSnapshot {
+  title: string;
+  format: DocFormatId;
+  text: string;
+  viewMode: ViewMode;
+}
 
 async function registerBravura() {
   if (typeof FontFace === "undefined") return;
@@ -90,7 +98,6 @@ async function initEngine(opts: MountShellOptions): Promise<App> {
     });
     _onZoomChange?.(app.zoom);
 
-    // 引擎就緒後在背景先載入 AI 模型，真正上傳時不用等下載
     void import("./omrkit/runtime.browser").then((m) => m.browserRuntime.prepare("det")).catch(() => {});
 
     _app = app;
@@ -100,96 +107,105 @@ async function initEngine(opts: MountShellOptions): Promise<App> {
   return _appPromise;
 }
 
-function baseTitle(name: string): string {
-  return name.replace(/^.*[\\/]/, "").replace(/\.[^.]+$/, "");
-}
-
 async function recognizeAndRender(
-  file: File,
+  filesInput: File | readonly File[],
   opts: { kind?: OmrKind; onProgress?: (msg: string) => void } = {},
 ): Promise<{ engine: string; info: string }> {
   if (!_app) throw new Error("請先初始化引擎");
+  const files = Array.isArray(filesInput) ? [...filesInput] : [filesInput as File];
+  if (!files.length) throw new Error("未選擇任何檔案");
+
   _app.stopPlayback();
   _app.clearPages();
 
   const kind: OmrKind = opts.kind ?? "auto";
   const onProgress = opts.onProgress ?? (() => undefined);
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  const mime = file.type || undefined;
-  const title = file.name ? baseTitle(file.name) : undefined;
-  const name = file.name.toLowerCase();
+  const first = files[0]!;
+  const firstName = first.name.toLowerCase();
 
-  if (!name.endsWith(".pdf") && !/\.(png|jpe?g|webp)$/i.test(name)) {
-    _app.importBytes(bytes, file.name);
+  // 單一非圖片/PDF 的譜檔（MusicXML / ABC / 123 / jpwabc 等）直接由官方解析渲染
+  if (files.length === 1 && !firstName.endsWith(".pdf") && !/\.(png|jpe?g|webp)$/i.test(firstName)) {
+    const bytes = new Uint8Array(await first.arrayBuffer());
+    _app.importBytes(bytes, first.name);
     await _app.whenIdle();
-    if (/\.(xml|musicxml)$/i.test(name) && _app.mode === "jp") {
+    if (/\.(xml|musicxml)$/i.test(firstName) && _app.mode === "jp") {
       await _app.setViewMode("staff");
     }
     if (_app.pageEls.length === 0) {
-      throw new Error(_app.status || `無法解析檔案：${file.name}`);
+      throw new Error(_app.status || "無法解析此樂譜檔案");
     }
-    return { engine: "native-doc", info: `已載入 ${file.name}` };
+    return { engine: "native-doc", info: "樂譜載入完成" };
   }
 
   let xml = "";
   let engine = "";
   let info = "";
 
-  // 1. PDF 矢量 / 轉曲五線譜
-  if (kind !== "jianpu" && isPdf(bytes, mime)) {
-    onProgress("分析 PDF 五線譜結構中...");
-    const sb = await import("./staffomr/browser");
-    let pdfDoc: Awaited<ReturnType<typeof sb.openStaffPdf>> | null = null;
-    try {
-      pdfDoc = await sb.openStaffPdf(bytes);
-    } catch {
-      pdfDoc = null;
-    }
-    if (pdfDoc) {
+  // 1. 單一 PDF 矢量 / 轉曲五線譜
+  if (files.length === 1 && kind !== "jianpu") {
+    const firstBytes = new Uint8Array(await first.arrayBuffer());
+    if (isPdf(firstBytes, first.type || undefined)) {
+      onProgress("分析 PDF 五線譜結構中...");
+      const sb = await import("./staffomr/browser");
+      let pdfDoc: Awaited<ReturnType<typeof sb.openStaffPdf>> | null = null;
       try {
-        if (await sb.isStaffPdf(pdfDoc.pdf, pdfDoc.OPS)) {
-          const res = await sb.recognizeStaffPdf(pdfDoc, {
-            onProgress: (d, t) => onProgress(`辨識矢量五線譜第 ${d}/${t} 頁...`),
-            noteIds: false,
-          });
-          if (res.notes > 0 && res.musicxml) {
-            xml = res.musicxml;
-            engine = "vector-staff";
-            info = `矢量五線譜 · ${res.pages} 頁 · ${res.notes} 音符`;
-          }
-        } else {
-          const ob = await import("./outlineomr/browser");
-          if (await ob.isOutlinedStaffPdf(pdfDoc.pdf, pdfDoc.OPS)) {
-            const res = await ob.recognizeOutlinedPdf(pdfDoc, {
-              onProgress: (d, t) => onProgress(`辨識轉曲五線譜第 ${d}/${t} 頁...`),
+        pdfDoc = await sb.openStaffPdf(firstBytes);
+      } catch {
+        pdfDoc = null;
+      }
+      if (pdfDoc) {
+        try {
+          if (await sb.isStaffPdf(pdfDoc.pdf, pdfDoc.OPS)) {
+            const res = await sb.recognizeStaffPdf(pdfDoc, {
+              onProgress: (d, t) => onProgress(`辨識矢量五線譜第 ${d}/${t} 頁...`),
               noteIds: false,
             });
             if (res.notes > 0 && res.musicxml) {
               xml = res.musicxml;
-              engine = "outlined-staff";
-              info = `轉曲五線譜 · ${res.pages} 頁 · ${res.notes} 音符`;
+              engine = "vector-staff";
+              info = `矢量五線譜 · ${res.pages} 頁 · ${res.notes} 音符`;
+            }
+          } else {
+            const ob = await import("./outlineomr/browser");
+            if (await ob.isOutlinedStaffPdf(pdfDoc.pdf, pdfDoc.OPS)) {
+              const res = await ob.recognizeOutlinedPdf(pdfDoc, {
+                onProgress: (d, t) => onProgress(`辨識轉曲五線譜第 ${d}/${t} 頁...`),
+                noteIds: false,
+              });
+              if (res.notes > 0 && res.musicxml) {
+                xml = res.musicxml;
+                engine = "outlined-staff";
+                info = `轉曲五線譜 · ${res.pages} 頁 · ${res.notes} 音符`;
+              }
             }
           }
+        } finally {
+          pdfDoc.pdf.destroy?.();
         }
-      } finally {
-        pdfDoc.pdf.destroy?.();
       }
     }
   }
 
-  // 2. 位圖五線譜（圖片或掃描 PDF）
+  // 2. 位圖五線譜（支援單張或多張依序合併，或掃描 PDF）
   if (!xml && kind !== "jianpu") {
     onProgress("1/4 載入五線譜引擎...");
     const rb = await import("./rasteromr/browser");
-    onProgress(`2/4 轉換圖檔 (${Math.round(bytes.length / 1024)} KB)...`);
-    const rasterPdf = await rb.asRasterPdf(bytes, mime);
+    const rasterPdfs: Uint8Array[] = [];
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i]!;
+      const b = new Uint8Array(await f.arrayBuffer());
+      onProgress(files.length > 1
+        ? `2/4 轉換第 ${i + 1}/${files.length} 頁圖檔 (${Math.round(b.length / 1024)} KB)...`
+        : `2/4 轉換圖檔 (${Math.round(b.length / 1024)} KB)...`);
+      rasterPdfs.push(await rb.asRasterPdf(b, f.type || undefined));
+    }
+
     onProgress("3/4 偵測五線譜結構...");
-    const probe = kind === "staff" ? null : await rb.probeRasterStaff(rasterPdf);
+    const probe = kind === "staff" ? null : await rb.probeRasterStaff(rasterPdfs[0]!);
     if (!probe || probe.isStaff) {
       let ocrCount = 0;
       onProgress("4/4 啟動五線譜辨識與 AI 文字偵測...");
-      const res = await rb.recognizeRasterPdfs([rasterPdf], {
-        ...(title ? { title } : {}),
+      const res = await rb.recognizeRasterPdfs(rasterPdfs, {
         onPage: (d, t) => onProgress(`AI 辨識五線譜第 ${d}/${t} 頁...`),
         onOcr: (ocrKind, ms) => {
           ocrCount++;
@@ -211,14 +227,17 @@ async function recognizeAndRender(
   // 3. 簡譜圖片 / 掃描簡譜 PDF
   if (!xml) {
     onProgress("AI 辨識簡譜中...");
-    const { score } = await recognizeMusicppDetailed(bytes, mime);
+    const firstBytes = new Uint8Array(await first.arrayBuffer());
+    const { score } = await recognizeMusicppDetailed(firstBytes, first.type || undefined);
     const out = omrEmitter("123").emit(score);
     if (out.kind !== "123") {
       throw new Error("簡譜轉出格式異常");
     }
     xml = scoreDocToMusicXml(out.doc);
     engine = "jianpu";
-    info = `AI 簡譜 · ${score.rows.length} 行`;
+    info = files.length > 1
+      ? `AI 簡譜 · ${score.rows.length} 行（已辨識第 1 頁）`
+      : `AI 簡譜 · ${score.rows.length} 行`;
   }
 
   onProgress("正在排版樂譜頁面...");
@@ -243,7 +262,10 @@ declare global {
     __dolceEngine?: {
       mount: typeof initEngine;
       loadFile: typeof recognizeAndRender;
+      loadFiles: typeof recognizeAndRender;
       loadXmlText: (xml: string, viewMode?: ViewMode) => Promise<void>;
+      getSnapshot: () => ScoreSnapshot | null;
+      loadSnapshot: (snap: Pick<ScoreSnapshot, "format" | "text" | "viewMode">) => Promise<void>;
       setViewMode: (m: ViewMode) => Promise<void>;
       exportXml: () => Promise<string>;
       zoomBy: (f: number) => void;
@@ -259,6 +281,7 @@ declare global {
 window.__dolceEngine = {
   mount: initEngine,
   loadFile: recognizeAndRender,
+  loadFiles: recognizeAndRender,
   async loadXmlText(xml, viewMode = "staff") {
     if (!_app) return;
     _app.stopPlayback();
@@ -267,6 +290,34 @@ window.__dolceEngine = {
       throw new Error(_app.status || "樂譜 XML 無法渲染");
     }
     await _app.setViewMode(viewMode);
+    await _app.whenIdle();
+    if (_app.pageEls.length === 0) {
+      throw new Error(_app.status || "樂譜頁面渲染失敗");
+    }
+  },
+  getSnapshot() {
+    if (!_app || _app.pageEls.length === 0) return null;
+    const rawTitle = (_app.documentTitle() || "").trim();
+    const title = rawTitle && rawTitle !== "未命名" ? rawTitle : "已儲存樂譜";
+    return {
+      title,
+      format: _app.docFormat,
+      text: _app.getText(),
+      viewMode: _app.viewMode,
+    };
+  },
+  async loadSnapshot(snap) {
+    if (!_app) return;
+    _app.stopPlayback();
+    _app.clearPages();
+    if (snap.format === "musicxml") {
+      if (!_app.adoptStaffXml(snap.text)) {
+        throw new Error(_app.status || "收藏樂譜無法渲染");
+      }
+    } else {
+      _app.adoptText(snap.format, snap.text, null);
+    }
+    await _app.setViewMode(snap.viewMode);
     await _app.whenIdle();
     if (_app.pageEls.length === 0) {
       throw new Error(_app.status || "樂譜頁面渲染失敗");
