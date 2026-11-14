@@ -144,6 +144,8 @@
     #sl-app .row-play .btn-play-main { background: var(--sl-sage); color: #fff; border-color: var(--sl-sage); }
     #sl-app .row-play .btn.active { background: var(--sl-sage); color: #fff; border-color: var(--sl-sage); }
     #sl-app .row-play .btn-range.picking { background: var(--sl-amber); color: #fff; border-color: var(--sl-amber); }
+    #sl-app .row-play .btn-range.picking.has-start { background: var(--sl-clay); color: #fff; border-color: var(--sl-clay); }
+    #sl-app .row-play .btn-range-clear { border-color: #d9bbbb; color: var(--sl-coral); background: #fdf9f9; }
     #sl-app .row-play select { border-color: #b7cbb9; color: #3a523f; background: #f8fbf8; }
     #sl-app .row-play .mono-tag { background: #f8fbf8; border-color: #b7cbb9; color: #3a523f; }
     #sl-app .progress-wrap { display: inline-flex; align-items: center; gap: 8px; flex: 1; min-width: 190px; }
@@ -161,7 +163,7 @@
 
     /* 純 SVG 圖示按鍵 */
     #sl-app .btn-icon { padding: 6px 8px; min-width: 34px; min-height: 30px; line-height: 1; }
-    #sl-app .btn-icon svg { width: 16px; height: 16px; display: block; }
+    #sl-app .btn-icon svg { width: 16px; height: 16px; display: block; pointer-events: none; }
     #sl-app .btn-fav { border-color: #d9bbbb !important; color: var(--sl-rose) !important; background: #fdf9f9 !important; }
     #sl-app .btn-fav.fav-saved { background: var(--sl-rose) !important; color: #fff !important; border-color: var(--sl-rose) !important; }
     #sl-app .btn-fav-top.fav-open { background: var(--sl-rose-bg) !important; border-color: var(--sl-rose) !important; }
@@ -274,7 +276,10 @@
     }
     #sl-app #score-pane {
       flex: 1; min-height: 0; overflow: auto; padding: 16px; background: #e8e3d9;
-      user-select: none;
+      user-select: none; -webkit-tap-highlight-color: transparent;
+    }
+    #sl-app #score-pane.sl-picking {
+      cursor: crosshair;
     }
 
     /* 測驗/圖鑑 五線譜 SVG & 簡譜 */
@@ -436,7 +441,7 @@
       <!-- 樂譜主輸出區：三行色彩分組工具列 + 官方動態譜面 -->
       <div id="analyzerOutput" class="hidden" style="margin-top:14px;">
         <div class="toolbar-stack">
-          <!-- 第 1 行：播放與選段反覆控制（莫蘭迪鼠尾草綠） -->
+          <!-- 第 1 行：播放與純 SVG 控制列（莫蘭迪鼠尾草綠） -->
           <div class="toolbar-row row-play">
             <button class="btn btn-xs btn-play-main" id="myBtnPlay" type="button">
               <span class="playback-icon"></span>
@@ -448,10 +453,43 @@
               <span class="mono-tag" id="myTime">0:00 / 0:00</span>
             </div>
             <select id="mySpeed"></select>
-            <button class="btn btn-xs" id="myBtnLoop" type="button">循環</button>
-            <button class="btn btn-xs" id="myBtnMetro" type="button">節拍</button>
-            <button class="btn btn-xs btn-range" id="myBtnRangeMode" type="button" title="在樂譜點選起點與終點，或直接滑鼠框選片段">選段</button>
-            <button class="btn btn-xs hidden" id="myBtnRangeClear" type="button">清除選段</button>
+            <!-- 循環（純 SVG） -->
+            <button class="btn btn-icon" id="myBtnLoop" type="button" title="循環" aria-label="循環">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="17 1 21 5 17 9"/>
+                <path d="M3 11V9a4 4 0 0 1 4-4h14"/>
+                <polyline points="7 23 3 19 7 15"/>
+                <path d="M21 13v2a4 4 0 0 1-4 4H3"/>
+              </svg>
+            </button>
+            <!-- 節拍（純 SVG） -->
+            <button class="btn btn-icon" id="myBtnMetro" type="button" title="節拍" aria-label="節拍">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M7 20h10l-2.5-15h-5L7 20z"/>
+                <line x1="12" y1="16" x2="18" y2="6"/>
+                <circle cx="16.2" cy="8.8" r="1.4" fill="currentColor" stroke="none"/>
+                <line x1="5" y1="20" x2="19" y2="20"/>
+              </svg>
+            </button>
+            <!-- 選段（純 SVG） -->
+            <button class="btn btn-icon btn-range" id="myBtnRangeMode" type="button" title="選段：點選起點與終點（電腦支援滑鼠框選）" aria-label="選段">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M8 4H5v16h3"/>
+                <path d="M16 4h3v16h-3"/>
+                <line x1="9" y1="12" x2="15" y2="12"/>
+                <circle cx="9" cy="12" r="1.6" fill="currentColor" stroke="none"/>
+                <circle cx="15" cy="12" r="1.6" fill="currentColor" stroke="none"/>
+              </svg>
+            </button>
+            <!-- 清除選段（純 SVG） -->
+            <button class="btn btn-icon btn-range-clear hidden" id="myBtnRangeClear" type="button" title="清除選段" aria-label="清除選段">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M7 4H4v16h3"/>
+                <path d="M17 4h3v16h-3"/>
+                <line x1="9.5" y1="9.5" x2="14.5" y2="14.5"/>
+                <line x1="14.5" y1="9.5" x2="9.5" y2="14.5"/>
+              </svg>
+            </button>
           </div>
 
           <!-- 第 2 行：譜面視圖（莫蘭迪霧霾藍） -->
@@ -560,6 +598,31 @@
     const FAV_META_LS = 'scorelab_favorites_meta_v1';
     const NOTATION_LS = 'scorelab_quiz_notation_v1';
     const VIEW_LABEL = { staff: '五線譜', mixed: '混排', expanded: '簡譜', original: '簡譜' };
+
+    const RANGE_SVG_IDLE = `
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M8 4H5v16h3"/>
+        <path d="M16 4h3v16h-3"/>
+        <line x1="9" y1="12" x2="15" y2="12"/>
+        <circle cx="9" cy="12" r="1.6" fill="currentColor" stroke="none"/>
+        <circle cx="15" cy="12" r="1.6" fill="currentColor" stroke="none"/>
+      </svg>`;
+    const RANGE_SVG_PICK_START = `
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M8 4H5v16h3"/>
+        <path d="M16 4h3v16h-3" opacity="0.45"/>
+        <line x1="9" y1="12" x2="15" y2="12" stroke-dasharray="2 2"/>
+        <circle cx="9" cy="12" r="2.4" fill="currentColor" stroke="none"/>
+        <circle cx="15" cy="12" r="1.4" stroke="currentColor" fill="none"/>
+      </svg>`;
+    const RANGE_SVG_PICK_END = `
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M8 4H5v16h3"/>
+        <path d="M16 4h3v16h-3"/>
+        <line x1="9" y1="12" x2="15" y2="12"/>
+        <circle cx="9" cy="12" r="1.8" fill="currentColor" stroke="none"/>
+        <circle cx="15" cy="12" r="2.5" stroke="currentColor" fill="none"/>
+      </svg>`;
 
     // 載入記譜偏好（預設為五線譜）
     try {
@@ -853,6 +916,7 @@
         if (!window.__dolceEngine) {
           await new Promise((resolve) => window.addEventListener('dolce-engine-ready', resolve, { once: true }));
         }
+        const scorePane = document.getElementById('score-pane');
         const zoomBtn = document.getElementById('myBtnZoomReset');
         const rangeBtn = document.getElementById('myBtnRangeMode');
         const clearBtn = document.getElementById('myBtnRangeClear');
@@ -862,7 +926,7 @@
           ['expanded', document.getElementById('myViewExpanded')],
         ]);
         await window.__dolceEngine.mount({
-          scorePane: document.getElementById('score-pane'),
+          scorePane,
           hiddenCodePane: document.getElementById('code-pane-hidden'),
           statusEl: null,
           playBtn: document.getElementById('myBtnPlay'),
@@ -878,8 +942,21 @@
             if (zoomBtn) zoomBtn.textContent = `${Math.round(z * 100)}%`;
           },
           onRangeChange: ({ active, picking, hasStart }) => {
+            scorePane.classList.toggle('sl-picking', picking);
             rangeBtn.classList.toggle('picking', picking);
-            rangeBtn.textContent = picking ? (hasStart ? '點選終點' : '點選起點') : '選段';
+            rangeBtn.classList.toggle('has-start', picking && hasStart);
+            rangeBtn.classList.toggle('active', active && !picking);
+            if (picking) {
+              rangeBtn.innerHTML = hasStart ? RANGE_SVG_PICK_END : RANGE_SVG_PICK_START;
+              const label = hasStart ? '請點選終點音符' : '請點選起點音符';
+              rangeBtn.title = label;
+              rangeBtn.setAttribute('aria-label', label);
+            } else {
+              rangeBtn.innerHTML = RANGE_SVG_IDLE;
+              const label = active ? '選段反覆中（點擊可重新選段）' : '選段：點選起點與終點（電腦支援滑鼠框選）';
+              rangeBtn.title = label;
+              rangeBtn.setAttribute('aria-label', label);
+            }
             clearBtn.classList.toggle('hidden', !active && !hasStart);
           },
         });
