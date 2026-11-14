@@ -1,3 +1,4 @@
+import { SAMPLE } from "./editor/sample";
 import { MetaData } from "./smufl/smufl";
 import { setMeasureBackend } from "./common/measure";
 import { browserMeasure, ensureFontsReady } from "./common/measure.browser";
@@ -58,10 +59,11 @@ async function initEngine(opts: MountShellOptions): Promise<App> {
     const meta = await MetaData.shared();
 
     const app = new App(meta, opts.scorePane);
-    app.statusEl = opts.statusEl ?? null;
+// 不共用 omrStatusText，避免 App 內部重排時把「辨識完成」文字清成空字串
+    app.statusEl = null;
     app.loadSettings();
-    app.mountEditor(opts.hiddenCodePane, "");
-
+    app.mountEditor(opts.hiddenCodePane, SAMPLE);
+    
     if (opts.playBtn) {
       app.playback.setPlaybackBtn(opts.playBtn);
       opts.playBtn.addEventListener("click", () => void app.playback.toggle());
