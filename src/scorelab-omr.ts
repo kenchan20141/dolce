@@ -1,3 +1,4 @@
+import "./styles.css";
 import { SAMPLE } from "./editor/sample";
 import { MetaData } from "./smufl/smufl";
 import { setMeasureBackend } from "./common/measure";
