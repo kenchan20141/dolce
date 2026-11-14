@@ -237,14 +237,71 @@
       align-items: center; gap: 10px; background: var(--sl-surface-2); transition: border-color 0.15s, background 0.15s;
     }
     #sl-app .dropzone:hover, #sl-app .dropzone.dragover { border-color: var(--sl-sage); background: var(--sl-sage-bg); }
+    #sl-app .dropzone.processing {
+      border-color: var(--sl-sage);
+      animation: sl-dz-pulse 1.8s ease-in-out infinite;
+    }
+    @keyframes sl-dz-pulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(91, 122, 98, 0.18); }
+      50% { box-shadow: 0 0 0 5px rgba(91, 122, 98, 0.08); }
+    }
     #sl-app .dropzone-title { font-weight: 700; font-size: 0.94rem; letter-spacing: 0.08em; color: var(--sl-text); }
 
+    /* 純視覺化進度指示與錯誤提示 */
     #sl-app .omr-status-bar {
-      margin-top: 10px; padding: 9px 12px; border-radius: 8px;
-      background: var(--sl-slate-bg); border: 1px solid #c9d4de;
-      font-size: 0.8rem; color: var(--sl-slate); display: flex; justify-content: space-between; align-items: center; gap: 8px;
+      margin-top: 10px; padding: 10px 14px; border-radius: 8px;
+      background: var(--sl-surface-2); border: 1px solid var(--sl-line);
+      min-height: 38px;
+      display: flex; justify-content: space-between; align-items: center; gap: 12px;
     }
-    #sl-app .omr-status-bar.err { color: var(--sl-coral); border-color: #dfc3c3; background: var(--sl-coral-bg); }
+    #sl-app .omr-status-bar.err {
+      color: var(--sl-coral); border-color: #dfc3c3; background: var(--sl-coral-bg);
+      font-size: 0.8rem;
+    }
+    #sl-app .omr-visual-loader {
+      display: flex; align-items: center; gap: 12px; width: 100%;
+    }
+    #sl-app .omr-wave {
+      display: inline-flex; align-items: center; gap: 3px; height: 18px; flex-shrink: 0;
+    }
+    #sl-app .omr-wave i {
+      display: block; width: 3px; height: 6px; border-radius: 2px;
+      background: var(--sl-sage); font-style: normal;
+      animation: sl-wave-bar 1.05s ease-in-out infinite;
+    }
+    #sl-app .omr-wave i:nth-child(2) { animation-delay: 0.14s; }
+    #sl-app .omr-wave i:nth-child(3) { animation-delay: 0.28s; }
+    #sl-app .omr-wave i:nth-child(4) { animation-delay: 0.42s; }
+    #sl-app .omr-wave i:nth-child(5) { animation-delay: 0.56s; }
+    @keyframes sl-wave-bar {
+      0%, 100% { height: 5px; opacity: 0.4; }
+      50% { height: 17px; opacity: 1; }
+    }
+    #sl-app .omr-track {
+      position: relative; flex: 1; height: 6px; border-radius: 999px;
+      background: var(--sl-line); overflow: hidden;
+    }
+    #sl-app .omr-fill {
+      position: absolute; top: 0; bottom: 0; left: 0; width: 0%;
+      border-radius: 999px;
+      background: linear-gradient(90deg, var(--sl-sage), #7a9a81, var(--sl-sage));
+      background-size: 200% 100%;
+      transition: width 0.35s cubic-bezier(0.22, 1, 0.36, 1);
+      animation: sl-fill-shimmer 1.6s linear infinite;
+    }
+    #sl-app .omr-track.indeterminate .omr-fill {
+      width: 34% !important;
+      transition: none;
+      animation: sl-indeterminate 1.35s ease-in-out infinite, sl-fill-shimmer 1.6s linear infinite;
+    }
+    @keyframes sl-fill-shimmer {
+      0% { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+    @keyframes sl-indeterminate {
+      0% { left: -36%; }
+      100% { left: 102%; }
+    }
 
     /* 多頁順序確認面板（精準單行對齊排版） */
     #sl-app .queue-panel {
@@ -470,9 +527,15 @@
         <div class="fav-grid" id="favGrid"></div>
       </div>
 
-      <!-- 進度與錯誤提示 -->
-      <div id="omrStatusBox" class="omr-status-bar hidden">
-        <span id="omrStatusText">準備中...</span>
+      <!-- 純視覺化進度指示（無文字）與錯誤重試 -->
+      <div id="omrStatusBox" class="omr-status-bar hidden" aria-label="處理中">
+        <div id="omrVisualLoader" class="omr-visual-loader">
+          <span class="omr-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+          <div id="omrTrack" class="omr-track indeterminate">
+            <div id="omrFill" class="omr-fill"></div>
+          </div>
+        </div>
+        <span id="omrStatusText" class="hidden"></span>
         <button class="btn btn-xs hidden" id="btnRetryOmr" type="button">重新辨識</button>
       </div>
 
@@ -811,7 +874,7 @@
             await renderFavoritesPanel();
           } catch (err) {
             console.error(err);
-            setOmrStatus(`載入失敗：${err?.message || err}`, 'err');
+            setOmrError(`載入失敗：${err?.message || err}`);
           }
         });
 
@@ -820,7 +883,7 @@
     }
 
     // ==========================================
-    // 2. 樂譜區：多頁順序確認 & 辨識引擎
+    // 2. 樂譜區：多頁順序確認 & 純視覺進度辨識
     // ==========================================
     let lastOmrFiles = [];
     let pendingQueue = [];
@@ -828,18 +891,52 @@
     let enginePromise = null;
 
     function hideOmrStatus() {
+      document.getElementById('dropzone').classList.remove('processing');
       document.getElementById('omrStatusBox').classList.add('hidden');
+      document.getElementById('omrStatusText').classList.add('hidden');
       document.getElementById('btnRetryOmr').classList.add('hidden');
     }
 
-    function setOmrStatus(msg, state = '') {
+    function setOmrProgress(ratio = null) {
+      const dz = document.getElementById('dropzone');
       const box = document.getElementById('omrStatusBox');
+      const loader = document.getElementById('omrVisualLoader');
+      const track = document.getElementById('omrTrack');
+      const fill = document.getElementById('omrFill');
       const txt = document.getElementById('omrStatusText');
       const retry = document.getElementById('btnRetryOmr');
-      box.className = `omr-status-bar ${state}`.trim();
+
+      dz.classList.add('processing');
+      box.className = 'omr-status-bar';
+      loader.classList.remove('hidden');
+      txt.textContent = '';
+      txt.classList.add('hidden');
+      retry.classList.add('hidden');
+
+      if (typeof ratio === 'number' && Number.isFinite(ratio)) {
+        const pct = Math.max(6, Math.min(100, Math.round(ratio * 100)));
+        track.classList.remove('indeterminate');
+        fill.style.width = `${pct}%`;
+      } else {
+        track.classList.add('indeterminate');
+      }
+    }
+
+    function setOmrError(msg) {
+      const dz = document.getElementById('dropzone');
+      const box = document.getElementById('omrStatusBox');
+      const loader = document.getElementById('omrVisualLoader');
+      const txt = document.getElementById('omrStatusText');
+      const retry = document.getElementById('btnRetryOmr');
+
+      dz.classList.remove('processing');
+      box.className = 'omr-status-bar err';
+      loader.classList.add('hidden');
       txt.textContent = msg;
+      txt.classList.remove('hidden');
+
       const isOmr = lastOmrFiles.length > 0 && lastOmrFiles.every(f => /\.(pdf|png|jpe?g|webp)$/i.test(f.name) || f.type.startsWith('image/'));
-      retry.classList.toggle('hidden', state !== 'err' || !isOmr);
+      retry.classList.toggle('hidden', !isOmr);
     }
 
     function clearPendingQueue() {
@@ -1009,15 +1106,16 @@
       const first = files[0];
       const name = first.name.toLowerCase();
       document.getElementById('analyzerOutput').classList.add('hidden');
-      setOmrStatus('初始化引擎中...');
+      setOmrProgress(null);
       try {
         const eng = await ensureDolceEngine();
 
         if (files.length === 1 && (name.endsWith('.mid') || name.endsWith('.midi'))) {
-          setOmrStatus('讀取樂譜中...');
+          setOmrProgress(0.45);
           const buf = await first.arrayBuffer();
           const parsed = parseMIDI(buf);
           const xml = exportScoreToMusicXML(parsed.trackViews[0].bars, parsed.bpm || 100);
+          setOmrProgress(0.85);
           await eng.loadXmlText(xml, 'mixed');
           document.getElementById('analyzerOutput').classList.remove('hidden');
           await syncFavToggleButton();
@@ -1028,7 +1126,7 @@
         const kind = document.getElementById('omrKindSelect').value;
         const res = await eng.loadFiles(files, {
           kind,
-          onProgress: (msg) => setOmrStatus(msg),
+          onProgress: (ratio) => setOmrProgress(ratio),
           onFirstPageReady: () => {
             document.getElementById('analyzerOutput').classList.remove('hidden');
           },
@@ -1040,7 +1138,7 @@
       } catch (err) {
         console.error(err);
         document.getElementById('analyzerOutput').classList.add('hidden');
-        setOmrStatus(`辨識失敗：${err?.message || err}`, 'err');
+        setOmrError(`辨識失敗：${err?.message || err}`);
       }
     }
 
