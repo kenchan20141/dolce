@@ -21,31 +21,47 @@ let _detSession: any = null;
 let _initPromise: Promise<void> | null = null;
 let _detInitPromise: Promise<void> | null = null;
 
-/** 瀏覽器端預設強制單執行緒，避免多執行緒 wasm worker 冷啟動卡死導致整個 ort 全域單例掛掉。 */
+function isChromiumEngine(): boolean {
+  const uaData = (globalThis.navigator as { userAgentData?: { brands?: { brand: string }[] } } | undefined)?.userAgentData;
+  if (uaData?.brands?.length) return uaData.brands.some((b) => /Chromium|Google Chrome|Microsoft Edge/i.test(b.brand));
+  return /Chrome\/\d/.test((globalThis.navigator as { userAgent?: string } | undefined)?.userAgent ?? "");
+}
+
 function desiredThreads(): number {
   const ov = (globalThis as { __ortThreads?: number }).__ortThreads;
   if (typeof ov === "number") return Math.max(1, ov);
-  return 1;
+  if (!(globalThis as { crossOriginIsolated?: boolean }).crossOriginIsolated) return 1;
+  if (!isChromiumEngine()) return 1;
+  const hw = (globalThis.navigator as { hardwareConcurrency?: number } | undefined)?.hardwareConcurrency ?? 4;
+  return Math.min(4, Math.max(1, hw));
 }
 
 function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
   return Promise.race([p, new Promise<T>((_, rej) => setTimeout(() => rej(new Error(`${what} 超时 ${ms}ms`)), ms))]);
 }
 
-async function createRecSingle(): Promise<unknown> {
+async function fetchModelBytes(url: string): Promise<Uint8Array> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`模型下載失敗 (${res.status}): ${url}`);
+  return new Uint8Array(await res.arrayBuffer());
+}
+
+async function createRecSingle(recBytes: Uint8Array): Promise<unknown> {
   _ort.env.wasm.numThreads = 1;
   _ort.env.wasm.proxy = false;
-  return _ort.InferenceSession.create(REC_URL, { executionProviders: ["wasm"] });
+  return _ort.InferenceSession.create(recBytes, { executionProviders: ["wasm"] });
 }
 
 async function createRecSession(): Promise<unknown> {
+  const recBytes = await fetchModelBytes(REC_URL);
   const threads = desiredThreads();
   if (threads <= 1) {
-    return createRecSingle();
+    return createRecSingle(recBytes);
   }
   try {
     _ort.env.wasm.numThreads = threads;
-    const sess = await withTimeout(_ort.InferenceSession.create(REC_URL, { executionProviders: ["wasm"] }), 8000, "多线程 OCR create");
+    _ort.env.wasm.proxy = false;
+    const sess = await withTimeout(_ort.InferenceSession.create(recBytes, { executionProviders: ["wasm"] }), 8000, "多线程 OCR create");
     const warm = new _ort.Tensor("float32", new Float32Array(3 * REC_H * REC_H), [1, 3, REC_H, REC_H]);
     const feeds: Record<string, unknown> = {};
     feeds[(sess as { inputNames: string[] }).inputNames[0]] = warm;
@@ -53,7 +69,7 @@ async function createRecSession(): Promise<unknown> {
     return sess;
   } catch (e) {
     console.warn("[OMR] 多线程 OCR 初始化失败/超时，回退单线程：", e);
-    return createRecSingle();
+    return createRecSingle(recBytes);
   }
 }
 
@@ -63,7 +79,6 @@ async function ensureRec(): Promise<void> {
   _initPromise = (async () => {
     const ort = await import("onnxruntime-web/wasm");
     ort.env.wasm.wasmPaths = { wasm: ortWasmUrl, mjs: ortMjsUrl };
-    ort.env.wasm.numThreads = 1;
     ort.env.wasm.proxy = false;
     _ort = ort;
     _session = await createRecSession();
@@ -76,7 +91,8 @@ async function ensureDet(): Promise<void> {
   if (_detSession) return;
   if (_detInitPromise) return _detInitPromise;
   _detInitPromise = (async () => {
-    _detSession = await _ort.InferenceSession.create(DET_URL, { executionProviders: ["wasm"] });
+    const detBytes = await fetchModelBytes(DET_URL);
+    _detSession = await _ort.InferenceSession.create(detBytes, { executionProviders: ["wasm"] });
   })();
   return _detInitPromise;
 }
@@ -96,6 +112,8 @@ export const browserRuntime: OmrRuntime = {
     return { data: o.data as Float32Array, dims: o.dims as number[] };
   },
   async loadDict() {
-    return (await fetch(DICT_URL)).text();
+    const res = await fetch(DICT_URL);
+    if (!res.ok) throw new Error(`字典下載失敗 (${res.status}): ${DICT_URL}`);
+    return res.text();
   },
 };
