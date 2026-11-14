@@ -1,5 +1,4 @@
 
-
 <!DOCTYPE html>
 <html lang="zh-Hant" class="sl-html">
 <head>
@@ -450,16 +449,18 @@
     #sl-app .row-view .btn-edit-mode.active { background: var(--sl-amber); color: #fff; border-color: var(--sl-amber); }
     #sl-app .btn-edit-mode svg { width: 13px; height: 13px; display: block; flex-shrink: 0; }
 
-    /* 修譜工具面板（展開式，莫蘭迪暖麥色） */
+    /* 修譜工具面板：繁體分區分色 + 純 SVG 儲存/放棄 */
     #sl-app .edit-panel {
-      margin-bottom: 10px; padding: 10px 12px; border-radius: 8px;
-      background: var(--sl-amber-bg); border: 1px solid #dfd0b8;
-      display: flex; flex-direction: column; gap: 8px;
+      margin-bottom: 10px; padding: 10px; border-radius: 10px;
+      background: var(--sl-surface-2); border: 1px solid var(--sl-line-hi);
+      display: flex; flex-direction: column; gap: 6px;
     }
     #sl-app .edit-bar {
       display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px;
+      padding: 6px 10px; border-radius: 7px;
+      background: var(--sl-amber-bg); border: 1px solid #dfd0b8;
     }
-    #sl-app .edit-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+    #sl-app .edit-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
     #sl-app .edit-badge {
       font-size: 0.74rem; font-weight: 700; padding: 0 9px; height: 26px;
       border-radius: 5px; display: inline-flex; align-items: center;
@@ -472,30 +473,65 @@
       background: var(--sl-coral-bg); border: 1px solid #dfc3c3; color: var(--sl-coral);
       cursor: pointer; white-space: nowrap;
     }
-    #sl-app .edit-status {
-      font-size: 0.75rem; color: var(--sl-clay); font-weight: 600;
-    }
+    #sl-app .edit-status { font-size: 0.75rem; color: var(--sl-clay); font-weight: 600; }
     #sl-app .edit-status:empty { display: none; }
-    #sl-app .edit-panel .btn-xs {
-      height: 26px; padding: 0 10px; font-size: 0.74rem;
+
+    #sl-app .edit-bar .btn-xs {
+      height: 28px; padding: 0 10px; font-size: 0.74rem;
       border-color: #d7c3a0; color: #6a4d22; background: var(--sl-surface);
     }
-    #sl-app .edit-panel .btn-xs.active {
+    #sl-app .edit-bar .btn-xs.active {
       background: var(--sl-amber); color: #fff; border-color: var(--sl-amber);
     }
-    #sl-app #visual-palette {
-      background: var(--sl-surface); border: 1px solid var(--sl-line);
-      border-radius: 6px; padding: 6px 8px;
-      display: flex; flex-wrap: wrap; gap: 4px; align-items: center;
-      max-height: 170px; overflow-y: auto;
+    #sl-app .btn-edit-save {
+      background: var(--sl-sage) !important; color: #fff !important; border-color: var(--sl-sage) !important;
+      width: 30px !important; min-width: 30px !important; height: 28px !important;
     }
-    #sl-app #visual-palette button {
-      min-height: 28px; padding: 2px 7px; border-radius: 5px;
-      border: 1px solid var(--sl-line-hi); background: var(--sl-surface-2);
-      color: var(--sl-text); font-size: 0.76rem; font-weight: 600; cursor: pointer;
+    #sl-app .btn-edit-discard {
+      background: #fdf9f9 !important; color: var(--sl-coral) !important; border-color: #d9bbbb !important;
+      width: 30px !important; min-width: 30px !important; height: 28px !important;
     }
-    #sl-app #visual-palette button:hover:not(:disabled) { background: var(--sl-sage-bg); border-color: var(--sl-sage); }
-    #sl-app #visual-palette button:disabled { opacity: 0.35; cursor: not-allowed; }
+
+    /* 四行分色修譜群組 */
+    #sl-app .edit-group {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 5px;
+      padding: 6px 8px; border-radius: 7px; border: 1px solid transparent;
+    }
+    #sl-app .edit-group-label {
+      font-size: 0.71rem; font-weight: 700; letter-spacing: 0.06em;
+      padding: 0 6px; height: 24px; border-radius: 4px;
+      display: inline-flex; align-items: center; white-space: nowrap; flex-shrink: 0;
+    }
+    #sl-app .eg-btn {
+      height: 28px; min-width: 28px; padding: 0 8px; border-radius: 5px;
+      font-size: 0.76rem; font-weight: 600; cursor: pointer;
+      display: inline-flex; align-items: center; justify-content: center;
+      border: 1px solid transparent; transition: filter 0.12s ease; white-space: nowrap;
+    }
+    #sl-app .eg-btn:hover { filter: brightness(0.95); }
+    #sl-app .eg-btn:active { transform: translateY(1px); }
+
+    /* Group 1: 導覽與復原（莫蘭迪柔霧玫） */
+    #sl-app .eg-nav { background: var(--sl-rose-bg); border-color: #e4cece; }
+    #sl-app .eg-nav .edit-group-label { background: #ead4d4; color: #753e3e; }
+    #sl-app .eg-nav .eg-btn { background: #fdfafa; border-color: #dcc2c2; color: #6b3b3b; }
+    #sl-app .eg-nav .eg-btn-del { background: #faecec; border-color: #d8adad; color: var(--sl-coral); }
+
+    /* Group 2: 音符與音高（莫蘭迪鼠尾草綠） */
+    #sl-app .eg-pitch { background: var(--sl-sage-bg); border-color: #cedad0; }
+    #sl-app .eg-pitch .edit-group-label { background: #d6e4d8; color: #344d39; }
+    #sl-app .eg-pitch .eg-btn { background: #f8fbf8; border-color: #b7cbb9; color: #2f4634; }
+    #sl-app .eg-pitch .eg-btn-num { min-width: 28px; font-weight: 700; background: #ffffff; }
+
+    /* Group 3: 拍長與記號（莫蘭迪霧霾藍） */
+    #sl-app .eg-rhythm { background: var(--sl-slate-bg); border-color: #ced7e0; }
+    #sl-app .eg-rhythm .edit-group-label { background: #d5dfe8; color: #344454; }
+    #sl-app .eg-rhythm .eg-btn { background: #f7fafc; border-color: #b7c4d1; color: #364758; }
+
+    /* Group 4: 小節與結構（莫蘭迪暖陶米） */
+    #sl-app .eg-meas { background: var(--sl-clay-bg); border-color: #ded2c8; }
+    #sl-app .eg-meas .edit-group-label { background: #e6dad1; color: #543e31; }
+    #sl-app .eg-meas .eg-btn { background: #fbf9f7; border-color: #cbbab0; color: #574134; }
 
     /* Row 3: 頁面與匯出、收藏工具列（莫蘭迪暖陶米） */
     #sl-app .row-tools { background: var(--sl-clay-bg); border-color: #ded2c8; justify-content: space-between; }
@@ -868,7 +904,7 @@
         <button class="btn btn-xs hidden" id="btnRetryOmr" type="button">重新辨識</button>
       </div>
 
-      <!-- 樂譜主輸出區：三行色彩分組工具列 + 可展開修譜面板 + 官方動態譜面 -->
+      <!-- 樂譜主輸出區：三行色彩分組工具列 + 繁體分色修譜面板 + 官方動態譜面 -->
       <div id="analyzerOutput" class="hidden" style="margin-top:14px;">
         <div class="toolbar-stack">
           <!-- 第 1 行：播放與純 SVG 控制列（莫蘭迪鼠尾草綠） -->
@@ -933,7 +969,7 @@
               <button class="btn btn-xs" id="myViewMixed" type="button">混排</button>
               <button class="btn btn-xs" id="myViewExpanded" type="button">簡譜</button>
             </div>
-            <button class="btn btn-xs btn-edit-mode" id="myBtnEditMode" type="button" aria-pressed="false" title="點譜面音符直接手動修改音高或拍子">
+            <button class="btn btn-xs btn-edit-mode" id="myBtnEditMode" type="button" aria-pressed="false" title="開啟/放棄修譜模式">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M12 20h9"/>
                 <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/>
@@ -995,8 +1031,9 @@
           </div>
         </div>
 
-        <!-- 可展開修譜面板（點「修譜」才顯示，掛載原版 VisualEditController 面板與拍數檢查） -->
+        <!-- 繁體分色修譜面板（需按純 SVG 儲存鍵才保存，否則放棄不儲存） -->
         <div id="editPanel" class="edit-panel hidden">
+          <!-- 頂部狀態與純 SVG 儲存 / 放棄列 -->
           <div class="edit-bar">
             <div class="edit-meta">
               <span id="visual-mode" class="edit-badge" hidden></span>
@@ -1005,12 +1042,85 @@
               <span id="editStatusText" class="edit-status"></span>
             </div>
             <div class="row-nowrap">
-              <button class="btn btn-xs" id="btn-beat-check" type="button" title="顯示拍數檢查紅框">對拍</button>
-              <button class="btn btn-xs" id="btn-format-marks" type="button" title="顯示換行與換頁記號">換行</button>
-              <button class="btn btn-xs" id="btn-palette" type="button" title="收合/展開修譜按鈕面板">面板</button>
+              <button class="btn btn-xs" id="btn-beat-check" type="button" title="顯示/隱藏拍數異常紅框">對拍</button>
+              <button class="btn btn-xs" id="btn-format-marks" type="button" title="顯示/隱藏換行與換頁記號">換行</button>
+              <!-- 純 SVG 放棄修訂（不儲存） -->
+              <button class="btn btn-icon btn-edit-discard" id="myBtnEditDiscard" type="button" title="放棄修訂（不儲存）" aria-label="放棄修訂">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="18" y1="6" x2="6" y2="18"/>
+                  <line x1="6" y1="6" x2="18" y2="18"/>
+                </svg>
+              </button>
+              <!-- 純 SVG 儲存修訂 -->
+              <button class="btn btn-icon btn-edit-save" id="myBtnEditSave" type="button" title="儲存修訂" aria-label="儲存修訂">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="20 6 9 17 4 12"/>
+                </svg>
+              </button>
             </div>
           </div>
-          <div id="visual-palette" hidden></div>
+
+          <!-- 第 1 行：導覽、對拍與復原（柔霧玫） -->
+          <div class="edit-group eg-nav">
+            <span class="edit-group-label">導覽</span>
+            <button class="eg-btn" type="button" data-act="nav.prev" title="上一個">◀</button>
+            <button class="eg-btn" type="button" data-act="nav.next" title="下一個">▶</button>
+            <button class="eg-btn" type="button" data-act="mode.edit" title="選取模式">選音</button>
+            <button class="eg-btn" type="button" data-act="mode.insert" title="插入游標">插音</button>
+            <button class="eg-btn" type="button" data-act="issue.prev" title="上一處錯拍">上錯拍</button>
+            <button class="eg-btn" type="button" data-act="issue.next" title="下一處錯拍">下錯拍</button>
+            <button class="eg-btn" type="button" data-act="edit.undo" title="復原">↶ 復原</button>
+            <button class="eg-btn" type="button" data-act="edit.redo" title="重做">↷ 重做</button>
+            <button class="eg-btn eg-btn-del" type="button" data-act="del.back" title="刪除選取">⌫ 刪除</button>
+          </div>
+
+          <!-- 第 2 行：音符與音高（鼠尾草綠） -->
+          <div class="edit-group eg-pitch">
+            <span class="edit-group-label">音高</span>
+            <button class="eg-btn eg-btn-num" type="button" data-act="note.digit" data-key="1">1</button>
+            <button class="eg-btn eg-btn-num" type="button" data-act="note.digit" data-key="2">2</button>
+            <button class="eg-btn eg-btn-num" type="button" data-act="note.digit" data-key="3">3</button>
+            <button class="eg-btn eg-btn-num" type="button" data-act="note.digit" data-key="4">4</button>
+            <button class="eg-btn eg-btn-num" type="button" data-act="note.digit" data-key="5">5</button>
+            <button class="eg-btn eg-btn-num" type="button" data-act="note.digit" data-key="6">6</button>
+            <button class="eg-btn eg-btn-num" type="button" data-act="note.digit" data-key="7">7</button>
+            <button class="eg-btn eg-btn-num" type="button" data-act="note.digit" data-key="0" title="休止符">0休</button>
+            <button class="eg-btn" type="button" data-act="step.up" title="升一音級">音↑</button>
+            <button class="eg-btn" type="button" data-act="step.down" title="降一音級">音↓</button>
+            <button class="eg-btn" type="button" data-act="semi.up" title="升半音">半↑</button>
+            <button class="eg-btn" type="button" data-act="semi.down" title="降半音">半↓</button>
+            <button class="eg-btn" type="button" data-act="oct.up" title="高八度">高8</button>
+            <button class="eg-btn" type="button" data-act="oct.down" title="低八度">低8</button>
+            <button class="eg-btn" type="button" data-act="acc.sharp" title="升記號">♯</button>
+            <button class="eg-btn" type="button" data-act="acc.flat" title="降記號">♭</button>
+            <button class="eg-btn" type="button" data-act="acc.natural" title="還原記號">♮</button>
+          </div>
+
+          <!-- 第 3 行：拍長與記號（霧霾藍） -->
+          <div class="edit-group eg-rhythm">
+            <span class="edit-group-label">拍長</span>
+            <button class="eg-btn" type="button" data-act="dur.halve" title="時值減半">拍÷2</button>
+            <button class="eg-btn" type="button" data-act="dur.double" title="時值加倍">拍×2</button>
+            <button class="eg-btn" type="button" data-act="dur.dot" title="附點">附點·</button>
+            <button class="eg-btn" type="button" data-act="sus.add" title="加延音線">延音—</button>
+            <button class="eg-btn" type="button" data-act="tuplet.toggle" title="三連音">三連音</button>
+            <button class="eg-btn" type="button" data-act="tie.toggle" title="同音連結線">連結⌒</button>
+            <button class="eg-btn" type="button" data-act="slur.toggle" title="圓滑線">圓滑◡</button>
+            <button class="eg-btn" type="button" data-act="deco.fermata" title="延長記號">延長𝄐</button>
+          </div>
+
+          <!-- 第 4 行：小節與結構（暖陶米） -->
+          <div class="edit-group eg-meas">
+            <span class="edit-group-label">小節</span>
+            <button class="eg-btn" type="button" data-act="bar.insert" title="插入小節線">|</button>
+            <button class="eg-btn" type="button" data-act="meas.append" title="文末加小節">+小節</button>
+            <button class="eg-btn" type="button" data-act="meas.delete" title="刪除所在小節">-小節</button>
+            <button class="eg-btn" type="button" data-act="meas.key" title="修改調號">調號</button>
+            <button class="eg-btn" type="button" data-act="meas.time" title="修改拍號">拍號</button>
+            <button class="eg-btn" type="button" data-act="meas.tempo" title="修改速度">速度</button>
+            <button class="eg-btn" type="button" data-act="brk.line" title="換行">換行↵</button>
+            <button class="eg-btn" type="button" data-act="brk.page" title="換頁">換頁</button>
+          </div>
         </div>
 
         <div class="sl-score-box">
@@ -1429,6 +1539,8 @@
           viewSwitch: document.getElementById('myViewSwitch'),
           viewBtns,
           editToggleBtn: document.getElementById('myBtnEditMode'),
+          editSaveBtn: document.getElementById('myBtnEditSave'),
+          editDiscardBtn: document.getElementById('myBtnEditDiscard'),
           editPanel: document.getElementById('editPanel'),
           visualEls: {
             mode: document.getElementById('visual-mode'),
@@ -1436,8 +1548,6 @@
             marksBtn: document.getElementById('btn-format-marks'),
             beatBtn: document.getElementById('btn-beat-check'),
             beatCount: document.getElementById('beat-count'),
-            palette: document.getElementById('visual-palette'),
-            paletteBtn: document.getElementById('btn-palette'),
           },
           onZoomChange: (z) => {
             if (zoomBtn) zoomBtn.textContent = `${Math.round(z * 100)}%`;
@@ -1461,6 +1571,11 @@
               rangeBtn.setAttribute('aria-label', label);
             }
             clearBtn.classList.toggle('hidden', !active && !hasStart);
+          },
+          onEditModeChange: (editing) => {
+            if (!editing) {
+              void syncFavToggleButton();
+            }
           },
         });
         return window.__dolceEngine;
@@ -2092,6 +2207,14 @@
       void loadScoreFiles(ordered);
     });
     document.getElementById('btnCancelOrder').addEventListener('click', clearPendingQueue);
+
+    // 繁體分區修譜按鈕事件（保留 #score-pane 焦點以維持譜面藍框與游標顯示）
+    document.querySelectorAll('#editPanel [data-act]').forEach(btn => {
+      btn.addEventListener('pointerdown', (e) => e.preventDefault());
+      btn.addEventListener('click', () => {
+        window.__dolceEngine?.runVisualAction(btn.dataset.act, btn.dataset.key || '');
+      });
+    });
 
     // 選段反覆控制
     document.getElementById('myBtnRangeMode').addEventListener('click', () => window.__dolceEngine?.toggleRangePick());
