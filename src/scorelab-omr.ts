@@ -63,7 +63,6 @@ async function initEngine(opts: MountShellOptions): Promise<App> {
     app.statusEl = opts.statusEl ?? null;
     app.loadSettings();
     app.mountEditor(opts.hiddenCodePane, SAMPLE);
-    // 初始化完立刻清掉預設 SAMPLE 譜面，避免檔案辨識失敗時誤顯示「聖哉聖哉」
     app.stopPlayback();
     app.clearPages();
 
@@ -117,7 +116,7 @@ async function recognizeAndRender(
   const title = file.name ? baseTitle(file.name) : undefined;
   const name = file.name.toLowerCase();
 
-  // 非圖片/PDF 的譜檔（.musicxml/.xml/.abc/.123/.jcx/.jly/.jpwabc/.txt）直接由官方解析渲染
+  // 非圖片/PDF 的譜檔直接由官方解析渲染
   if (!name.endsWith(".pdf") && !/\.(png|jpe?g|webp)$/i.test(name)) {
     _app.importBytes(bytes, file.name);
     await _app.whenIdle();
@@ -178,14 +177,22 @@ async function recognizeAndRender(
 
   // 2. 位圖五線譜（圖片或掃描 PDF）
   if (!xml && kind !== "jianpu") {
-    onProgress("載入 AI 模型與分析譜表...");
+    onProgress("1/4 載入五線譜引擎...");
     const rb = await import("./rasteromr/browser");
+    onProgress(`2/4 轉換圖檔 (${Math.round(bytes.length / 1024)} KB)...`);
     const rasterPdf = await rb.asRasterPdf(bytes, mime);
+    onProgress("3/4 偵測五線譜結構...");
     const probe = kind === "staff" ? null : await rb.probeRasterStaff(rasterPdf);
     if (!probe || probe.isStaff) {
+      let ocrCount = 0;
+      onProgress("4/4 啟動五線譜辨識與 AI 文字偵測...");
       const res = await rb.recognizeRasterPdfs([rasterPdf], {
         ...(title ? { title } : {}),
         onPage: (d, t) => onProgress(`AI 辨識五線譜第 ${d}/${t} 頁...`),
+        onOcr: (ocrKind, ms) => {
+          ocrCount++;
+          onProgress(`4/4 AI 文字識別中 (#${ocrCount} ${ocrKind} · ${Math.round(ms)}ms)...`);
+        },
         cancelled: () => false,
         ...(probe?.pages ? { firstPages: probe.pages } : {}),
       });
@@ -212,15 +219,17 @@ async function recognizeAndRender(
     info = `AI 簡譜 · ${score.rows.length} 行`;
   }
 
+  onProgress("正在排版樂譜頁面...");
   if (!_app.adoptStaffXml(xml)) {
     throw new Error(_app.status || "辨識出的樂譜格式無法渲染");
   }
-  await _app.whenIdle();
+  // 不先等混排排完，直接切換到目標視圖後等最後結果即可
   if (engine === "jianpu") {
     await _app.setViewMode("original");
   } else {
     await _app.setViewMode("staff");
   }
+  await _app.whenIdle();
   if (_app.pageEls.length === 0) {
     throw new Error(_app.status || "樂譜頁面渲染失敗");
   }
@@ -256,8 +265,8 @@ window.__dolceEngine = {
     if (!_app.adoptStaffXml(xml)) {
       throw new Error(_app.status || "樂譜 XML 無法渲染");
     }
-    await _app.whenIdle();
     await _app.setViewMode(viewMode);
+    await _app.whenIdle();
     if (_app.pageEls.length === 0) {
       throw new Error(_app.status || "樂譜頁面渲染失敗");
     }
