@@ -37,9 +37,7 @@
       font-family: "Inter", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif;
       font-variant-numeric: tabular-nums;
     }
-    body.sl-body {
-      padding: 14px 10px 72px;
-    }
+    body.sl-body { padding: 14px 10px 72px; }
 
     #sl-app.sl-app { max-width: 1120px; margin: 0 auto; }
 
@@ -84,13 +82,36 @@
     #sl-app .btn {
       border: 1px solid var(--line-hi); background: var(--surface-2); color: var(--text);
       padding: 6px 11px; font-size: 0.76rem; font-weight: 700; cursor: pointer;
-      display: inline-flex; align-items: center; gap: 5px; border-radius: 0;
+      display: inline-flex; align-items: center; justify-content: center; gap: 5px; border-radius: 0;
     }
     #sl-app .btn:hover:not(:disabled) { border-color: var(--text); }
     #sl-app .btn:disabled { opacity: 0.35; cursor: not-allowed; }
     #sl-app .btn.active { background: var(--mint); color: #04120c; border-color: var(--mint); }
     #sl-app .btn-mint { background: var(--mint); color: #04120c; border-color: var(--mint); }
     #sl-app .btn-xs { padding: 4px 8px; font-size: 0.7rem; }
+
+    /* 純 SVG 圖示按鈕（我的最愛等） */
+    #sl-app .btn-icon {
+      padding: 5px 7px;
+      min-width: 28px;
+      min-height: 26px;
+      line-height: 1;
+    }
+    #sl-app .btn-icon svg {
+      width: 15px;
+      height: 15px;
+      display: block;
+    }
+    #sl-app .btn-icon.fav-saved {
+      border-color: var(--coral);
+      color: var(--coral);
+      background: var(--coral-bg);
+    }
+    #sl-app .btn-icon.fav-open {
+      border-color: var(--amber);
+      color: var(--amber);
+      background: var(--amber-bg);
+    }
 
     #sl-app .playback-icon { display: inline-flex; align-items: center; width: 10px; height: 10px; }
     #sl-app .playback-icon svg { width: 10px; height: 10px; display: block; }
@@ -152,26 +173,54 @@
     #sl-app .omr-status-bar.err { color: var(--coral); border-color: var(--coral); background: var(--coral-bg); }
     #sl-app .omr-status-bar.ok { color: var(--mint); border-color: var(--mint); background: var(--mint-bg); }
 
-    /* Dolce 官方譜面外框（內部 SVG 樣式完全交給 src/styles.css） */
+    /* 多頁順序確認面板 */
+    #sl-app .queue-panel {
+      margin-top: 10px; padding: 12px; background: var(--surface-2); border: 1px solid var(--amber);
+    }
+    #sl-app .queue-grid {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(135px, 1fr)); gap: 10px; margin: 10px 0;
+    }
+    #sl-app .queue-item {
+      background: var(--surface); border: 1px solid var(--line-hi); padding: 6px;
+      display: flex; flex-direction: column; gap: 6px; cursor: grab; user-select: none;
+    }
+    #sl-app .queue-item.dragging { opacity: 0.4; border-color: var(--mint); }
+    #sl-app .queue-thumb {
+      width: 100%; height: 140px; object-fit: contain; background: #fff; display: block;
+    }
+    #sl-app .queue-foot {
+      display: flex; justify-content: space-between; align-items: center; gap: 4px;
+    }
+
+    /* 我的最愛清單面板 */
+    #sl-app .fav-panel {
+      margin-top: 10px; padding: 12px; background: var(--surface-2); border: 1px solid var(--line-hi);
+    }
+    #sl-app .fav-grid {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; margin-top: 8px;
+    }
+    #sl-app .fav-card {
+      background: var(--surface); border: 1px solid var(--line); padding: 9px 10px;
+      display: flex; justify-content: space-between; align-items: center; gap: 8px; cursor: pointer;
+    }
+    #sl-app .fav-card:hover { border-color: var(--mint); }
+    #sl-app .fav-card.current { border-color: var(--mint); background: var(--mint-bg); }
+    #sl-app .fav-info { min-width: 0; flex: 1; }
+    #sl-app .fav-title { font-size: 0.8rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #sl-app .fav-sub { font-family: var(--mono); font-size: 0.66rem; color: var(--muted); margin-top: 3px; }
+
+    /* Dolce 官方譜面外框 */
     #sl-app .score-toolbar {
       display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center;
       gap: 8px; padding: 8px 10px; background: var(--surface-2); border: 1px solid var(--line);
       margin-bottom: 10px;
     }
     #sl-app .sl-score-box {
-      height: 76vh;
-      display: flex;
-      flex-direction: column;
-      border: 1px solid var(--line);
-      background: #141720;
-      overflow: hidden;
+      height: 76vh; display: flex; flex-direction: column;
+      border: 1px solid var(--line); background: #141720; overflow: hidden;
     }
     #sl-app #score-pane {
-      flex: 1;
-      min-height: 0;
-      overflow: auto;
-      padding: 16px;
-      background: #141720;
+      flex: 1; min-height: 0; overflow: auto; padding: 16px; background: #141720;
     }
 
     /* JIANPU NOTATION (測驗與圖鑑用) */
@@ -207,11 +256,21 @@
         <h1>SCORE LAB</h1>
       </div>
 
-      <nav class="tabs">
-        <button class="tab-btn active" data-tab="analyzer">樂譜</button>
-        <button class="tab-btn" data-tab="quiz">測驗</button>
-        <button class="tab-btn" data-tab="library">圖鑑</button>
-      </nav>
+      <div class="row">
+        <!-- 純 SVG 我的最愛清單按鍵 -->
+        <button class="btn btn-icon" id="myBtnFavList" type="button" title="我的最愛" aria-label="我的最愛">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
+            <path d="M12 13.5l-2.6-2.4a1.6 1.6 0 0 1 2.2-2.3L12 9.2l.4-.4a1.6 1.6 0 0 1 2.2 2.3L12 13.5z" fill="currentColor" stroke="none"/>
+          </svg>
+        </button>
+
+        <nav class="tabs">
+          <button class="tab-btn active" data-tab="analyzer">樂譜</button>
+          <button class="tab-btn" data-tab="quiz">測驗</button>
+          <button class="tab-btn" data-tab="library">圖鑑</button>
+        </nav>
+      </div>
     </header>
 
     <!-- 測驗 / 圖鑑專用 Transport -->
@@ -250,11 +309,10 @@
       </div>
     </div>
 
-    <!-- 1. 樂譜區：使用你自己的外殼 + 官方動態譜面與播放引擎 -->
+    <!-- 1. 樂譜區 -->
     <section id="analyzerSection" class="panel">
       <div class="dropzone" id="dropzone">
-        <div style="font-weight:800; font-size:0.88rem; letter-spacing:0.1em;">↑ 匯入樂譜（圖片 / PDF / XML / ABC / 123 / MIDI）</div>
-        <div class="mono-tag">.PNG / .JPG / .WEBP · .PDF · .XML / .MUSICXML · .ABC / .123 · .MID</div>
+        <div style="font-weight:800; font-size:0.88rem; letter-spacing:0.1em;">↑ 匯入樂譜（支援複選多張圖片或樂譜檔案）</div>
         <div class="row">
           <select id="omrKindSelect" title="圖片/PDF 辨識模式">
             <option value="auto">自動判別 (五線譜 / 簡譜)</option>
@@ -264,7 +322,29 @@
           <button class="btn btn-mint btn-xs" id="btnPickFile" type="button">選擇檔案</button>
           <button class="btn btn-xs" id="btnLoadDemo" type="button">載入範例</button>
         </div>
-        <input type="file" id="scoreInput" accept=".pdf,.png,.jpg,.jpeg,.webp,.xml,.musicxml,.abc,.123,.jcx,.jly,.jpwabc,.txt,.mid,.midi" class="hidden" />
+        <input type="file" id="scoreInput" multiple accept=".pdf,.png,.jpg,.jpeg,.webp,.xml,.musicxml,.abc,.123,.jcx,.jly,.jpwabc,.txt,.mid,.midi" class="hidden" />
+      </div>
+
+      <!-- 多張圖片先後順序確認面板 -->
+      <div id="multiQueuePanel" class="queue-panel hidden">
+        <div class="row between">
+          <span style="font-size:0.8rem; font-weight:800; color:var(--amber);">請確認各頁圖片的先後次序（可拖曳或點 ↑ ↓ 調整）</span>
+          <div class="row">
+            <button class="btn btn-mint btn-xs" id="btnConfirmOrder" type="button">▶ 確認順序並開始辨識</button>
+            <button class="btn btn-xs" id="btnCancelOrder" type="button">取消</button>
+          </div>
+        </div>
+        <div class="queue-grid" id="multiQueueGrid"></div>
+      </div>
+
+      <!-- 我的最愛抽屜面板 -->
+      <div id="favPanel" class="fav-panel hidden">
+        <div class="row between">
+          <span class="mono-tag" style="color:var(--amber); border-color:var(--amber);">FAVORITES · 快速載入（免重跑 AI）</span>
+          <button class="btn btn-xs" id="btnCloseFav" type="button">✕</button>
+        </div>
+        <div id="favEmptyHint" class="mono-tag" style="margin-top:8px; display:inline-block;">尚未收藏任何樂譜，載入樂譜後可按工具列愛心圖示加入</div>
+        <div class="fav-grid" id="favGrid"></div>
       </div>
 
       <div id="omrStatusBox" class="omr-status-bar hidden">
@@ -288,6 +368,13 @@
           </div>
 
           <div class="row">
+            <!-- 純 SVG 加入/移除我的最愛按鍵 -->
+            <button class="btn btn-icon" id="myBtnFavToggle" type="button" title="加入／移除我的最愛" aria-label="加入／移除我的最愛">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
+              </svg>
+            </button>
+
             <div class="row" id="myViewSwitch">
               <button class="btn btn-xs" id="myViewStaff" type="button">五線譜</button>
               <button class="btn btn-xs" id="myViewMixed" type="button">混排</button>
@@ -342,10 +429,274 @@
 
   <script>
     // ==========================================
-    // 1. 樂譜區：串接官方 Dolce 核心引擎
+    // 1. IndexedDB + localStorage 我的最愛存儲
     // ==========================================
-    let lastOmrFile = null;
+    const FAV_DB_NAME = 'scorelab_favorites_db';
+    const FAV_STORE = 'scores';
+    const FAV_META_LS = 'scorelab_favorites_meta_v1';
+    const VIEW_LABEL = { staff: '五線譜', mixed: '混排', original: '簡譜', expanded: '投影' };
+
+    function openFavDB() {
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open(FAV_DB_NAME, 1);
+        req.onupgradeneeded = () => {
+          const db = req.result;
+          if (!db.objectStoreNames.contains(FAV_STORE)) {
+            db.createObjectStore(FAV_STORE, { keyPath: 'id' });
+          }
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    async function getAllFavorites() {
+      const db = await openFavDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(FAV_STORE, 'readonly');
+        const req = tx.objectStore(FAV_STORE).getAll();
+        req.onsuccess = () => {
+          const list = (req.result || []).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+          try {
+            localStorage.setItem(FAV_META_LS, JSON.stringify(list.map(x => ({ id: x.id, hash: x.hash, title: x.title, viewMode: x.viewMode, createdAt: x.createdAt }))));
+          } catch {}
+          resolve(list);
+        };
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    async function putFavorite(record) {
+      const db = await openFavDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(FAV_STORE, 'readwrite');
+        tx.objectStore(FAV_STORE).put(record);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    }
+
+    async function deleteFavorite(id) {
+      const db = await openFavDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(FAV_STORE, 'readwrite');
+        tx.objectStore(FAV_STORE).delete(id);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    }
+
+    function hashSnapshot(format, text) {
+      let h = 2166136261;
+      const str = `${format}:${text}`;
+      for (let i = 0; i < str.length; i++) {
+        h ^= str.charCodeAt(i);
+        h = Math.imul(h, 16777619);
+      }
+      return `${format}:${str.length}:${(h >>> 0).toString(36)}`;
+    }
+
+    let currentFavHash = null;
+
+    async function syncFavToggleButton() {
+      const btn = document.getElementById('myBtnFavToggle');
+      const snap = window.__dolceEngine?.getSnapshot();
+      if (!snap) {
+        currentFavHash = null;
+        btn.classList.remove('fav-saved');
+        btn.querySelector('path').setAttribute('fill', 'none');
+        return;
+      }
+      currentFavHash = hashSnapshot(snap.format, snap.text);
+      const list = await getAllFavorites();
+      const hit = list.some(x => x.hash === currentFavHash);
+      btn.classList.toggle('fav-saved', hit);
+      btn.querySelector('path').setAttribute('fill', hit ? 'currentColor' : 'none');
+    }
+
+    async function renderFavoritesPanel() {
+      const list = await getAllFavorites();
+      const grid = document.getElementById('favGrid');
+      const empty = document.getElementById('favEmptyHint');
+      grid.innerHTML = '';
+      empty.classList.toggle('hidden', list.length > 0);
+
+      list.forEach(item => {
+        const card = document.createElement('div');
+        card.className = 'fav-card' + (item.hash === currentFavHash ? ' current' : '');
+
+        const info = document.createElement('div');
+        info.className = 'fav-info';
+        const d = new Date(item.createdAt || Date.now());
+        const dt = `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+        info.innerHTML = `<div class="fav-title"></div><div class="fav-sub">${VIEW_LABEL[item.viewMode] || '樂譜'} · ${dt}</div>`;
+        info.querySelector('.fav-title').textContent = item.title || '已儲存樂譜';
+
+        const actions = document.createElement('div');
+        actions.className = 'row';
+        actions.style.gap = '4px';
+
+        const btnRename = document.createElement('button');
+        btnRename.type = 'button';
+        btnRename.className = 'btn btn-xs btn-icon';
+        btnRename.title = '重新命名';
+        btnRename.setAttribute('aria-label', '重新命名');
+        btnRename.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>`;
+        btnRename.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const next = prompt('修改最愛樂譜名稱：', item.title || '已儲存樂譜');
+          if (next && next.trim()) {
+            item.title = next.trim();
+            await putFavorite(item);
+            await renderFavoritesPanel();
+          }
+        });
+
+        const btnDel = document.createElement('button');
+        btnDel.type = 'button';
+        btnDel.className = 'btn btn-xs btn-icon';
+        btnDel.title = '移除最愛';
+        btnDel.setAttribute('aria-label', '移除最愛');
+        btnDel.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M6 6l1 14h10l1-14"/></svg>`;
+        btnDel.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          await deleteFavorite(item.id);
+          await syncFavToggleButton();
+          await renderFavoritesPanel();
+        });
+
+        actions.append(btnRename, btnDel);
+        card.append(info, actions);
+
+        card.addEventListener('click', async () => {
+          setOmrStatus('正在快速讀取最愛樂譜...');
+          try {
+            const eng = await ensureDolceEngine();
+            await eng.loadSnapshot(item);
+            document.getElementById('analyzerOutput').classList.remove('hidden');
+            document.getElementById('favPanel').classList.add('hidden');
+            document.getElementById('myBtnFavList').classList.remove('fav-open');
+            await syncFavToggleButton();
+            await renderFavoritesPanel();
+            setOmrStatus('✓ 已從我的最愛快速載入', 'ok');
+          } catch (err) {
+            console.error(err);
+            setOmrStatus(`✕ 讀取失敗：${err?.message || err}`, 'err');
+          }
+        });
+
+        grid.appendChild(card);
+      });
+    }
+
+    // ==========================================
+    // 2. 樂譜區：串接官方 Dolce 核心引擎 + 多頁排序
+    // ==========================================
+    let lastOmrFiles = [];
+    let pendingQueue = []; // [{ file, url }]
+    let dragIndex = -1;
     let enginePromise = null;
+
+    function clearPendingQueue() {
+      pendingQueue.forEach(item => { try { URL.revokeObjectURL(item.url); } catch {} });
+      pendingQueue = [];
+      document.getElementById('multiQueuePanel').classList.add('hidden');
+      document.getElementById('multiQueueGrid').innerHTML = '';
+    }
+
+    function renderMultiQueue() {
+      const grid = document.getElementById('multiQueueGrid');
+      grid.innerHTML = '';
+      pendingQueue.forEach((item, idx) => {
+        const card = document.createElement('div');
+        card.className = 'queue-item';
+        card.draggable = true;
+
+        card.addEventListener('dragstart', () => { dragIndex = idx; card.classList.add('dragging'); });
+        card.addEventListener('dragend', () => { dragIndex = -1; card.classList.remove('dragging'); });
+        card.addEventListener('dragover', (e) => e.preventDefault());
+        card.addEventListener('drop', (e) => {
+          e.preventDefault();
+          if (dragIndex >= 0 && dragIndex !== idx) {
+            const [moved] = pendingQueue.splice(dragIndex, 1);
+            pendingQueue.splice(idx, 0, moved);
+            renderMultiQueue();
+          }
+        });
+
+        const img = document.createElement('img');
+        img.className = 'queue-thumb';
+        img.src = item.url;
+        img.alt = `第 ${idx + 1} 頁`;
+
+        const foot = document.createElement('div');
+        foot.className = 'queue-foot';
+
+        const badge = document.createElement('span');
+        badge.className = 'mono-tag';
+        badge.style.color = 'var(--mint)';
+        badge.textContent = `第 ${idx + 1} 頁`;
+
+        const btns = document.createElement('div');
+        btns.className = 'row';
+        btns.style.gap = '3px';
+
+        const up = document.createElement('button');
+        up.type = 'button'; up.className = 'btn btn-xs'; up.textContent = '↑'; up.disabled = idx === 0;
+        up.addEventListener('click', () => {
+          [pendingQueue[idx - 1], pendingQueue[idx]] = [pendingQueue[idx], pendingQueue[idx - 1]];
+          renderMultiQueue();
+        });
+
+        const down = document.createElement('button');
+        down.type = 'button'; down.className = 'btn btn-xs'; down.textContent = '↓'; down.disabled = idx === pendingQueue.length - 1;
+        down.addEventListener('click', () => {
+          [pendingQueue[idx + 1], pendingQueue[idx]] = [pendingQueue[idx], pendingQueue[idx + 1]];
+          renderMultiQueue();
+        });
+
+        const del = document.createElement('button');
+        del.type = 'button'; del.className = 'btn btn-xs'; del.textContent = '✕';
+        del.addEventListener('click', () => {
+          const [removed] = pendingQueue.splice(idx, 1);
+          try { URL.revokeObjectURL(removed.url); } catch {}
+          if (pendingQueue.length === 0) clearPendingQueue();
+          else renderMultiQueue();
+        });
+
+        btns.append(up, down, del);
+        foot.append(badge, btns);
+        card.append(img, foot);
+        grid.appendChild(card);
+      });
+    }
+
+    function handlePickedFiles(fileList) {
+      const files = [...fileList];
+      if (!files.length) return;
+      if (files.length === 1) {
+        clearPendingQueue();
+        void loadScoreFiles([files[0]]);
+        return;
+      }
+      const images = files
+        .filter(f => /\.(png|jpe?g|webp)$/i.test(f.name) || f.type.startsWith('image/'))
+        .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+      if (images.length === 0) {
+        clearPendingQueue();
+        void loadScoreFiles([files[0]]);
+        return;
+      }
+      if (images.length === 1) {
+        clearPendingQueue();
+        void loadScoreFiles([images[0]]);
+        return;
+      }
+      clearPendingQueue();
+      pendingQueue = images.map(file => ({ file, url: URL.createObjectURL(file) }));
+      document.getElementById('multiQueuePanel').classList.remove('hidden');
+      renderMultiQueue();
+    }
 
     function setOmrStatus(msg, state = '') {
       const box = document.getElementById('omrStatusBox');
@@ -353,8 +704,8 @@
       const retry = document.getElementById('btnRetryOmr');
       box.className = `omr-status-bar ${state}`.trim();
       txt.textContent = msg;
-      const isOmrFile = lastOmrFile && /\.(pdf|png|jpe?g|webp)$/i.test(lastOmrFile.name);
-      retry.classList.toggle('hidden', !isOmrFile);
+      const isOmr = lastOmrFiles.length > 0 && lastOmrFiles.every(f => /\.(pdf|png|jpe?g|webp)$/i.test(f.name) || f.type.startsWith('image/'));
+      retry.classList.toggle('hidden', !isOmr);
     }
 
     function ensureDolceEngine() {
@@ -392,31 +743,34 @@
       return enginePromise;
     }
 
-    async function loadScoreFile(file) {
-      lastOmrFile = file;
-      const name = file.name.toLowerCase();
+    async function loadScoreFiles(files) {
+      lastOmrFiles = [...files];
+      const first = files[0];
+      const name = first.name.toLowerCase();
       document.getElementById('analyzerOutput').classList.add('hidden');
       setOmrStatus('正在初始化樂譜與 AI 引擎...');
       try {
         const eng = await ensureDolceEngine();
 
-        if (name.endsWith('.mid') || name.endsWith('.midi')) {
+        if (files.length === 1 && (name.endsWith('.mid') || name.endsWith('.midi'))) {
           setOmrStatus('正在解析 MIDI...');
-          const buf = await file.arrayBuffer();
+          const buf = await first.arrayBuffer();
           const parsed = parseMIDI(buf);
           const xml = exportScoreToMusicXML(parsed.trackViews[0].bars, parsed.bpm || 100);
           await eng.loadXmlText(xml, 'mixed');
           document.getElementById('analyzerOutput').classList.remove('hidden');
-          setOmrStatus(`✓ 已載入 MIDI：${file.name}`, 'ok');
+          await syncFavToggleButton();
+          setOmrStatus('✓ 已載入 MIDI 樂譜', 'ok');
           return;
         }
 
         const kind = document.getElementById('omrKindSelect').value;
-        const res = await eng.loadFile(file, {
+        const res = await eng.loadFiles(files, {
           kind,
           onProgress: (msg) => setOmrStatus(msg),
         });
         document.getElementById('analyzerOutput').classList.remove('hidden');
+        await syncFavToggleButton();
         setOmrStatus(`✓ 完成：${res.info}`, 'ok');
       } catch (err) {
         console.error(err);
@@ -425,7 +779,7 @@
       }
     }
 
-    // MIDI -> MusicXML 轉換（僅在匯入 .mid/.midi 時使用）
+    // MIDI -> MusicXML 轉換
     function parseMIDI(arrayBuffer) {
       const dv = new DataView(arrayBuffer); let pos = 0;
       const readStr = (len) => { let s = ''; for (let i = 0; i < len; i++) s += String.fromCharCode(dv.getUint8(pos++)); return s; };
@@ -621,7 +975,7 @@
 </score-partwise>`;
 
     // ==========================================
-    // 2. 測驗與圖鑑 (原樣保留)
+    // 3. 測驗與圖鑑
     // ==========================================
     const CATEGORIES = { basic: '基礎', syncopation: '切分', sixteenth: '16分', dotted: '附點', offbeat: '反拍' };
     const n = (dur) => ({ t: 'n', dur });
@@ -773,7 +1127,6 @@
           if (selectedCats.has(k)) { if (selectedCats.size === 1) return; selectedCats.delete(k); btn.classList.remove('active'); }
           else { selectedCats.add(k); btn.classList.add('active'); }
           renderLibrary(); generateQuestion(false);
-          setTimeout(() => void ensureDolceEngine(), 300);
         });
         bar.appendChild(btn);
       });
@@ -837,7 +1190,7 @@
     }
 
     // ==========================================
-    // 3. 事件綁定
+    // 4. 事件綁定
     // ==========================================
     function switchTab(tabName) {
       stopQuizAudio();
@@ -862,29 +1215,87 @@
     document.getElementById('btnNextQuestion').addEventListener('click', () => generateQuestion(true));
     document.getElementById('btnBannerNext').addEventListener('click', () => generateQuestion(true));
 
+    // 檔案匯入 & 多頁順序確認
     const dropzone = document.getElementById('dropzone'), scoreInput = document.getElementById('scoreInput');
     document.getElementById('omrKindSelect').addEventListener('click', (e) => e.stopPropagation());
     document.getElementById('omrKindSelect').addEventListener('change', () => {
-      if (lastOmrFile && /\.(pdf|png|jpe?g|webp)$/i.test(lastOmrFile.name)) void loadScoreFile(lastOmrFile);
+      if (lastOmrFiles.length > 0 && lastOmrFiles.every(f => /\.(pdf|png|jpe?g|webp)$/i.test(f.name) || f.type.startsWith('image/'))) {
+        void loadScoreFiles(lastOmrFiles);
+      }
     });
-    document.getElementById('btnRetryOmr').addEventListener('click', () => { if (lastOmrFile) void loadScoreFile(lastOmrFile); });
+    document.getElementById('btnRetryOmr').addEventListener('click', () => { if (lastOmrFiles.length > 0) void loadScoreFiles(lastOmrFiles); });
     document.getElementById('btnPickFile').addEventListener('click', (e) => { e.stopPropagation(); scoreInput.click(); });
     dropzone.addEventListener('click', () => scoreInput.click());
-    scoreInput.addEventListener('change', (e) => { if (e.target.files[0]) void loadScoreFile(e.target.files[0]); scoreInput.value = ''; });
+    scoreInput.addEventListener('change', (e) => { if (e.target.files?.length) handlePickedFiles(e.target.files); scoreInput.value = ''; });
     dropzone.addEventListener('dragover', (e) => { e.preventDefault(); dropzone.classList.add('dragover'); });
     dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
-    dropzone.addEventListener('drop', (e) => { e.preventDefault(); dropzone.classList.remove('dragover'); if (e.dataTransfer.files[0]) void loadScoreFile(e.dataTransfer.files[0]); });
+    dropzone.addEventListener('drop', (e) => { e.preventDefault(); dropzone.classList.remove('dragover'); if (e.dataTransfer.files?.length) handlePickedFiles(e.dataTransfer.files); });
+
+    document.getElementById('btnConfirmOrder').addEventListener('click', () => {
+      if (!pendingQueue.length) return;
+      const ordered = pendingQueue.map(x => x.file);
+      clearPendingQueue();
+      void loadScoreFiles(ordered);
+    });
+    document.getElementById('btnCancelOrder').addEventListener('click', clearPendingQueue);
+
+    // 我的最愛 SVG 按鍵
+    document.getElementById('myBtnFavList').addEventListener('click', async () => {
+      const panel = document.getElementById('favPanel');
+      const btn = document.getElementById('myBtnFavList');
+      const open = panel.classList.contains('hidden');
+      panel.classList.toggle('hidden', !open);
+      btn.classList.toggle('fav-open', open);
+      if (open) await renderFavoritesPanel();
+    });
+    document.getElementById('btnCloseFav').addEventListener('click', () => {
+      document.getElementById('favPanel').classList.add('hidden');
+      document.getElementById('myBtnFavList').classList.remove('fav-open');
+    });
+    document.getElementById('myBtnFavToggle').addEventListener('click', async () => {
+      const snap = window.__dolceEngine?.getSnapshot();
+      if (!snap) return;
+      const hash = hashSnapshot(snap.format, snap.text);
+      const list = await getAllFavorites();
+      const existing = list.find(x => x.hash === hash);
+      if (existing) {
+        await deleteFavorite(existing.id);
+        setOmrStatus('已從我的最愛移除', 'ok');
+      } else {
+        await putFavorite({
+          id: `fav_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+          hash,
+          title: snap.title,
+          format: snap.format,
+          text: snap.text,
+          viewMode: snap.viewMode,
+          createdAt: Date.now(),
+        });
+        setOmrStatus('✓ 已加入我的最愛（下次點書籤圖示可秒開）', 'ok');
+      }
+      await syncFavToggleButton();
+      if (!document.getElementById('favPanel').classList.contains('hidden')) {
+        await renderFavoritesPanel();
+      }
+    });
+
+    // 切換視圖時也同步我的最愛快照視圖狀態
+    ['myViewStaff', 'myViewMixed', 'myViewOriginal', 'myViewExpanded'].forEach(id => {
+      document.getElementById(id).addEventListener('click', () => setTimeout(() => void syncFavToggleButton(), 150));
+    });
 
     document.getElementById('btnLoadDemo').addEventListener('click', async (e) => {
       e.stopPropagation();
-      lastOmrFile = null;
+      lastOmrFiles = [];
+      clearPendingQueue();
       document.getElementById('analyzerOutput').classList.add('hidden');
       setOmrStatus('正在載入範例...');
       try {
         const eng = await ensureDolceEngine();
         await eng.loadXmlText(DEMO_MUSICXML, 'mixed');
         document.getElementById('analyzerOutput').classList.remove('hidden');
-        setOmrStatus('✓ 已載入範例（可點擊上方切換 五線譜 / 混排 / 簡譜 / 投影，或點音符從該處播放）', 'ok');
+        await syncFavToggleButton();
+        setOmrStatus('✓ 已載入範例', 'ok');
       } catch (err) {
         console.error(err);
         document.getElementById('analyzerOutput').classList.add('hidden');
@@ -912,6 +1323,7 @@
     initCategories();
     renderLibrary();
     generateQuestion(false);
+    setTimeout(() => void ensureDolceEngine(), 300);
   </script>
 </body>
 </html>
