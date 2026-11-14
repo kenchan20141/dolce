@@ -90,6 +90,9 @@ async function initEngine(opts: MountShellOptions): Promise<App> {
     });
     _onZoomChange?.(app.zoom);
 
+    // 引擎就緒後在背景先載入 AI 模型，真正上傳時不用等下載
+    void import("./omrkit/runtime.browser").then((m) => m.browserRuntime.prepare("det")).catch(() => {});
+
     _app = app;
     return app;
   })();
@@ -116,7 +119,6 @@ async function recognizeAndRender(
   const title = file.name ? baseTitle(file.name) : undefined;
   const name = file.name.toLowerCase();
 
-  // 非圖片/PDF 的譜檔直接由官方解析渲染
   if (!name.endsWith(".pdf") && !/\.(png|jpe?g|webp)$/i.test(name)) {
     _app.importBytes(bytes, file.name);
     await _app.whenIdle();
@@ -223,7 +225,6 @@ async function recognizeAndRender(
   if (!_app.adoptStaffXml(xml)) {
     throw new Error(_app.status || "辨識出的樂譜格式無法渲染");
   }
-  // 不先等混排排完，直接切換到目標視圖後等最後結果即可
   if (engine === "jianpu") {
     await _app.setViewMode("original");
   } else {
