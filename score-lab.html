@@ -395,10 +395,10 @@
     async function loadScoreFile(file) {
       lastOmrFile = file;
       const name = file.name.toLowerCase();
+      document.getElementById('analyzerOutput').classList.add('hidden');
       setOmrStatus('正在初始化樂譜與 AI 引擎...');
       try {
         const eng = await ensureDolceEngine();
-        document.getElementById('analyzerOutput').classList.remove('hidden');
 
         if (name.endsWith('.mid') || name.endsWith('.midi')) {
           setOmrStatus('正在解析 MIDI...');
@@ -406,6 +406,7 @@
           const parsed = parseMIDI(buf);
           const xml = exportScoreToMusicXML(parsed.trackViews[0].bars, parsed.bpm || 100);
           await eng.loadXmlText(xml, 'mixed');
+          document.getElementById('analyzerOutput').classList.remove('hidden');
           setOmrStatus(`✓ 已載入 MIDI：${file.name}`, 'ok');
           return;
         }
@@ -415,9 +416,11 @@
           kind,
           onProgress: (msg) => setOmrStatus(msg),
         });
+        document.getElementById('analyzerOutput').classList.remove('hidden');
         setOmrStatus(`✓ 完成：${res.info}`, 'ok');
       } catch (err) {
         console.error(err);
+        document.getElementById('analyzerOutput').classList.add('hidden');
         setOmrStatus(`✕ 失敗：${err?.message || err}`, 'err');
       }
     }
@@ -874,14 +877,16 @@
     document.getElementById('btnLoadDemo').addEventListener('click', async (e) => {
       e.stopPropagation();
       lastOmrFile = null;
+      document.getElementById('analyzerOutput').classList.add('hidden');
       setOmrStatus('正在載入範例...');
       try {
         const eng = await ensureDolceEngine();
-        document.getElementById('analyzerOutput').classList.remove('hidden');
         await eng.loadXmlText(DEMO_MUSICXML, 'mixed');
+        document.getElementById('analyzerOutput').classList.remove('hidden');
         setOmrStatus('✓ 已載入範例（可點擊上方切換 五線譜 / 混排 / 簡譜 / 投影，或點音符從該處播放）', 'ok');
       } catch (err) {
         console.error(err);
+        document.getElementById('analyzerOutput').classList.add('hidden');
         setOmrStatus(`✕ 載入範例失敗：${err?.message || err}`, 'err');
       }
     });
