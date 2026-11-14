@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-Hant">
+<html lang="zh-Hant" class="sl-html">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -24,192 +24,183 @@
       --mono: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
     }
 
-    * { box-sizing: border-box; }
+    #sl-app, #sl-app * { box-sizing: border-box; }
 
-    body {
+    html.sl-html, body.sl-body {
       margin: 0;
+      height: auto;
+      min-height: 100vh;
+      overflow-x: hidden;
+      overflow-y: auto;
       background: var(--bg);
       color: var(--text);
       font-family: "Inter", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif;
-      min-height: 100vh;
-      padding: 14px 10px 72px;
       font-variant-numeric: tabular-nums;
     }
+    body.sl-body {
+      padding: 14px 10px 72px;
+    }
 
-    .app { max-width: 1120px; margin: 0 auto; }
+    #sl-app.sl-app { max-width: 1120px; margin: 0 auto; }
 
     /* Topbar */
-    .topbar {
+    #sl-app .topbar {
       display: flex; justify-content: space-between; align-items: center;
       flex-wrap: wrap; gap: 10px; padding-bottom: 12px;
       border-bottom: 1px solid var(--line); margin-bottom: 12px;
     }
-    .brand { display: flex; align-items: center; gap: 8px; }
-    .brand-sq { width: 10px; height: 10px; background: var(--mint); }
-    .brand h1 { margin: 0; font-size: 0.9rem; letter-spacing: 0.22em; font-weight: 800; }
-    .mono-tag { font-family: var(--mono); font-size: 0.7rem; color: var(--muted); border: 1px solid var(--line); padding: 2px 7px; }
+    #sl-app .brand { display: flex; align-items: center; gap: 8px; }
+    #sl-app .brand-sq { width: 10px; height: 10px; background: var(--mint); }
+    #sl-app .brand h1 { margin: 0; font-size: 0.9rem; letter-spacing: 0.22em; font-weight: 800; color: var(--text); }
+    #sl-app .mono-tag { font-family: var(--mono); font-size: 0.7rem; color: var(--muted); border: 1px solid var(--line); padding: 2px 7px; }
 
-    .tabs { display: flex; gap: 2px; background: var(--surface); border: 1px solid var(--line); padding: 3px; }
-    .tab-btn { border: none; background: transparent; color: var(--muted); padding: 6px 12px; font-size: 0.78rem; font-weight: 700; cursor: pointer; }
-    .tab-btn.active { background: var(--text); color: var(--bg); }
+    #sl-app .tabs { display: flex; gap: 2px; background: var(--surface); border: 1px solid var(--line); padding: 3px; }
+    #sl-app .tab-btn { border: none; background: transparent; color: var(--muted); padding: 6px 12px; font-size: 0.78rem; font-weight: 700; cursor: pointer; }
+    #sl-app .tab-btn.active { background: var(--text); color: var(--bg); }
 
     /* Panels & Controls */
-    .panel { background: var(--surface); border: 1px solid var(--line); padding: 12px; margin-bottom: 10px; }
-    .row { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
-    .between { justify-content: space-between; }
+    #sl-app .panel { background: var(--surface); border: 1px solid var(--line); padding: 12px; margin-bottom: 10px; }
+    #sl-app .row { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+    #sl-app .between { justify-content: space-between; }
 
-    .ctrl-pill {
+    #sl-app .ctrl-pill {
       display: inline-flex; align-items: center; gap: 7px;
       background: var(--surface-2); border: 1px solid var(--line);
       padding: 4px 9px; font-family: var(--mono); font-size: 0.76rem;
     }
-    input[type="range"] { width: 70px; accent-color: var(--mint); cursor: pointer; }
-    select { background: var(--surface-2); color: var(--text); border: 1px solid var(--line); padding: 5px 8px; font-size: 0.76rem; font-weight: 700; outline: none; cursor: pointer; }
+    #sl-app input[type="range"] { width: 70px; accent-color: var(--mint); cursor: pointer; }
+    #sl-app select { background: var(--surface-2); color: var(--text); border: 1px solid var(--line); padding: 5px 8px; font-size: 0.76rem; font-weight: 700; outline: none; cursor: pointer; }
 
-    .toggle {
+    #sl-app .toggle {
       display: inline-flex; align-items: center; gap: 5px;
       background: var(--surface-2); border: 1px solid var(--line);
       padding: 5px 9px; font-size: 0.74rem; font-weight: 700; color: var(--muted); cursor: pointer; user-select: none;
     }
-    .toggle input { display: none; }
-    .toggle .dot { width: 6px; height: 6px; background: #333a4d; }
-    .toggle.on { color: var(--text); border-color: var(--line-hi); }
-    .toggle.on .dot { background: var(--mint); box-shadow: 0 0 8px var(--mint); }
+    #sl-app .toggle input { display: none; }
+    #sl-app .toggle .dot { width: 6px; height: 6px; background: #333a4d; }
+    #sl-app .toggle.on { color: var(--text); border-color: var(--line-hi); }
+    #sl-app .toggle.on .dot { background: var(--mint); box-shadow: 0 0 8px var(--mint); }
 
-    .btn {
+    #sl-app .btn {
       border: 1px solid var(--line-hi); background: var(--surface-2); color: var(--text);
       padding: 6px 11px; font-size: 0.76rem; font-weight: 700; cursor: pointer;
-      display: inline-flex; align-items: center; gap: 5px;
+      display: inline-flex; align-items: center; gap: 5px; border-radius: 0;
     }
-    .btn:hover:not(:disabled) { border-color: var(--text); }
-    .btn:disabled { opacity: 0.35; cursor: not-allowed; }
-    .btn.active { background: var(--mint); color: #04120c; border-color: var(--mint); }
-    .btn-mint { background: var(--mint); color: #04120c; border-color: var(--mint); }
-    .btn-xs { padding: 4px 8px; font-size: 0.7rem; }
+    #sl-app .btn:hover:not(:disabled) { border-color: var(--text); }
+    #sl-app .btn:disabled { opacity: 0.35; cursor: not-allowed; }
+    #sl-app .btn.active { background: var(--mint); color: #04120c; border-color: var(--mint); }
+    #sl-app .btn-mint { background: var(--mint); color: #04120c; border-color: var(--mint); }
+    #sl-app .btn-xs { padding: 4px 8px; font-size: 0.7rem; }
 
-    .playback-icon { display: inline-flex; align-items: center; width: 10px; height: 10px; }
-    .playback-icon svg { width: 10px; height: 10px; display: block; }
+    #sl-app .playback-icon { display: inline-flex; align-items: center; width: 10px; height: 10px; }
+    #sl-app .playback-icon svg { width: 10px; height: 10px; display: block; }
 
-    .cat-row { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
-    .cat-pill { border: 1px solid var(--line); background: transparent; color: var(--muted); padding: 3px 9px; font-size: 0.72rem; font-weight: 700; cursor: pointer; }
-    .cat-pill.active { border-color: var(--mint); color: var(--mint); background: var(--mint-bg); }
+    #sl-app .cat-row { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+    #sl-app .cat-pill { border: 1px solid var(--line); background: transparent; color: var(--muted); padding: 3px 9px; font-size: 0.72rem; font-weight: 700; cursor: pointer; }
+    #sl-app .cat-pill.active { border-color: var(--mint); color: var(--mint); background: var(--mint-bg); }
 
     /* Beat Matrix */
-    .beat-strip { display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 10px; }
-    .beat-status { font-family: var(--mono); font-size: 0.7rem; color: var(--muted); min-width: 60px; text-align: right; }
-    .leds { display: flex; gap: 5px; }
-    .led { width: 24px; height: 3px; background: var(--surface-2); border: 1px solid var(--line); }
-    .led.countin { background: var(--amber); border-color: var(--amber); }
-    .led.playing { background: var(--mint); border-color: var(--mint); }
+    #sl-app .beat-strip { display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 10px; }
+    #sl-app .beat-status { font-family: var(--mono); font-size: 0.7rem; color: var(--muted); min-width: 60px; text-align: right; }
+    #sl-app .leds { display: flex; gap: 5px; }
+    #sl-app .led { width: 24px; height: 3px; background: var(--surface-2); border: 1px solid var(--line); }
+    #sl-app .led.countin { background: var(--amber); border-color: var(--amber); }
+    #sl-app .led.playing { background: var(--mint); border-color: var(--mint); }
 
     /* Quiz / Library */
-    .grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
-    @media (max-width: 680px) { .grid-2 { grid-template-columns: 1fr; } }
+    #sl-app .grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+    @media (max-width: 680px) { #sl-app .grid-2 { grid-template-columns: 1fr; } }
 
-    .pad {
+    #sl-app .pad {
       position: relative; background: var(--surface-2); border: 1px solid var(--line);
       padding: 18px 10px 12px; min-height: 96px; display: flex; flex-direction: column;
       align-items: center; justify-content: center; cursor: pointer; overflow-x: auto;
     }
-    .pad:hover:not(.locked) { border-color: var(--text); }
-    .pad.correct { border-color: var(--mint); background: var(--mint-bg); }
-    .pad.wrong { border-color: var(--coral); background: var(--coral-bg); }
-    .pad.dimmed { opacity: 0.4; }
-    .pad-idx { position: absolute; top: 6px; left: 8px; font-family: var(--mono); font-size: 0.68rem; color: var(--muted); }
-    .pad-meta { margin-top: 6px; display: flex; align-items: center; gap: 8px; font-size: 0.74rem; color: var(--muted); font-weight: 700; }
+    #sl-app .pad:hover:not(.locked) { border-color: var(--text); }
+    #sl-app .pad.correct { border-color: var(--mint); background: var(--mint-bg); }
+    #sl-app .pad.wrong { border-color: var(--coral); background: var(--coral-bg); }
+    #sl-app .pad.dimmed { opacity: 0.4; }
+    #sl-app .pad-idx { position: absolute; top: 6px; left: 8px; font-family: var(--mono); font-size: 0.68rem; color: var(--muted); }
+    #sl-app .pad-meta { margin-top: 6px; display: flex; align-items: center; gap: 8px; font-size: 0.74rem; color: var(--muted); font-weight: 700; }
 
-    .result-strip {
+    #sl-app .result-strip {
       margin-top: 10px; padding: 8px 12px; display: none;
       align-items: center; justify-content: space-between; font-size: 0.8rem; font-weight: 700; border: 1px solid transparent;
     }
-    .result-strip.show { display: flex; }
-    .result-strip.ok { background: var(--mint-bg); border-color: var(--mint); color: var(--mint); }
-    .result-strip.err { background: var(--coral-bg); border-color: var(--coral); color: var(--coral); }
+    #sl-app .result-strip.show { display: flex; }
+    #sl-app .result-strip.ok { background: var(--mint-bg); border-color: var(--mint); color: var(--mint); }
+    #sl-app .result-strip.err { background: var(--coral-bg); border-color: var(--coral); color: var(--coral); }
 
-    .lib-card { background: var(--surface-2); border: 1px solid var(--line); padding: 9px 11px; cursor: pointer; overflow-x: auto; }
-    .playing-card { border-color: var(--mint) !important; box-shadow: inset 0 0 0 1px var(--mint); }
-    .card-top { display: flex; justify-content: space-between; align-items: center; gap: 6px; margin-bottom: 2px; }
-    .tag { font-family: var(--mono); font-size: 0.64rem; padding: 1px 5px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
-    .tag-sync { color: var(--amber); border-color: rgba(255,176,32,0.45); }
-    .tag-dot { color: var(--cyan); border-color: rgba(56,189,248,0.45); }
-    .tag-16 { color: #c084fc; border-color: rgba(192,132,252,0.45); }
-    .tag-off { color: var(--coral); border-color: rgba(255,59,92,0.45); }
+    #sl-app .lib-card { background: var(--surface-2); border: 1px solid var(--line); padding: 9px 11px; cursor: pointer; overflow-x: auto; }
+    #sl-app .playing-card { border-color: var(--mint) !important; box-shadow: inset 0 0 0 1px var(--mint); }
+    #sl-app .card-top { display: flex; justify-content: space-between; align-items: center; gap: 6px; margin-bottom: 2px; }
+    #sl-app .tag { font-family: var(--mono); font-size: 0.64rem; padding: 1px 5px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+    #sl-app .tag-sync { color: var(--amber); border-color: rgba(255,176,32,0.45); }
+    #sl-app .tag-dot { color: var(--cyan); border-color: rgba(56,189,248,0.45); }
+    #sl-app .tag-16 { color: #c084fc; border-color: rgba(192,132,252,0.45); }
+    #sl-app .tag-off { color: var(--coral); border-color: rgba(255,59,92,0.45); }
 
-    .dropzone {
+    #sl-app .dropzone {
       border: 1px dashed var(--line-hi); padding: 18px 12px; text-align: center;
       cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 8px;
     }
-    .dropzone:hover, .dropzone.dragover { border-color: var(--mint); background: var(--mint-bg); }
-    .omr-status-bar {
+    #sl-app .dropzone:hover, #sl-app .dropzone.dragover { border-color: var(--mint); background: var(--mint-bg); }
+    #sl-app .omr-status-bar {
       margin-top: 8px; padding: 8px 10px; background: var(--surface-2); border: 1px solid var(--line-hi);
       font-family: var(--mono); font-size: 0.74rem; color: var(--cyan); display: flex; justify-content: space-between; align-items: center;
     }
-    .omr-status-bar.err { color: var(--coral); border-color: var(--coral); background: var(--coral-bg); }
-    .omr-status-bar.ok { color: var(--mint); border-color: var(--mint); background: var(--mint-bg); }
+    #sl-app .omr-status-bar.err { color: var(--coral); border-color: var(--coral); background: var(--coral-bg); }
+    #sl-app .omr-status-bar.ok { color: var(--mint); border-color: var(--mint); background: var(--mint-bg); }
 
-    /* ========================
-       Dolce 官方譜面容器樣式
-       ======================== */
-    .score-toolbar {
+    /* Dolce 官方譜面外框（內部 SVG 樣式完全交給 src/styles.css） */
+    #sl-app .score-toolbar {
       display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center;
       gap: 8px; padding: 8px 10px; background: var(--surface-2); border: 1px solid var(--line);
       margin-bottom: 10px;
     }
-    #score-pane {
-      --score-zoom: 1;
-      --score-page-bg: #ffffff;
-      --score-page-max: 900px;
-      max-height: 76vh;
-      overflow: auto;
-      background: #141720;
+    #sl-app .sl-score-box {
+      height: 76vh;
+      display: flex;
+      flex-direction: column;
       border: 1px solid var(--line);
+      background: #141720;
+      overflow: hidden;
+    }
+    #sl-app #score-pane {
+      flex: 1;
+      min-height: 0;
+      overflow: auto;
       padding: 16px;
+      background: #141720;
     }
-    .score-page-wrap {
-      width: min(100%, calc(var(--score-page-max) * var(--score-zoom, 1)));
-      margin: 0 auto 14px;
-      background: var(--score-page-bg, #ffffff);
-      box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
-    }
-    .score-page-wrap svg {
-      width: 100%;
-      height: auto;
-      display: block;
-    }
-    .score-page-wrap .selected {
-      filter: drop-shadow(0 0 2px #2563eb);
-    }
-    /* 若需要播放高亮顏色與官方完全一致，請將 src/styles.css 裡的播放高亮樣式貼在下方 */
 
-    /* ========================
-       JIANPU NOTATION (測驗與圖鑑用)
-       ======================== */
-    .jianpu-bar {
+    /* JIANPU NOTATION (測驗與圖鑑用) */
+    #sl-app .jianpu-bar {
       display: inline-flex; align-items: center; flex-wrap: nowrap; gap: 12px;
       font-family: "Times New Roman", "Noto Serif TC", Georgia, serif;
       font-size: 21px; font-weight: 700; color: var(--text);
       padding: 26px 5px 34px; user-select: none;
     }
-    .jianpu-bar::before, .jianpu-bar::after {
+    #sl-app .jianpu-bar::before, #sl-app .jianpu-bar::after {
       content: ""; display: inline-block; width: 2px; height: 17px; background: var(--line-hi); align-self: center; flex-shrink: 0;
     }
-    .j-group-tight { display: inline-flex; align-items: center; gap: 4px; }
-    .u1 { display: inline-flex; align-items: center; gap: 5px; border-bottom: 2px solid #cbd5e1; padding-bottom: 2px; }
-    .u2-inner { display: inline-flex; align-items: center; gap: 4px; border-bottom: 2px solid #cbd5e1; padding-bottom: 2px; }
-    .j-ev { position: relative; display: inline-flex; align-items: center; line-height: 1.05; transition: color 0.05s, transform 0.05s; }
-    .j-ev.j-rest { color: var(--muted); }
-    .j-ev.active-note { color: #ffffff !important; text-shadow: 0 0 12px var(--mint), 0 0 4px #fff; transform: translateY(-2px) scale(1.18); }
-    .j-dash { font-family: system-ui, sans-serif; font-weight: 700; margin-left: 3px; color: var(--muted); font-size: 0.88em; }
-    .j-dot { font-weight: 900; margin-left: 1px; }
-    .triplet { position: relative; display: inline-flex; align-items: center; }
-    .triplet::before { content: "3"; position: absolute; top: -18px; left: 50%; transform: translateX(-50%); font-family: var(--mono); font-size: 10px; font-weight: 800; color: var(--cyan); line-height: 1; }
-    .triplet::after { content: ""; position: absolute; top: -7px; left: 1px; right: 1px; height: 4px; border-top: 1.5px solid var(--cyan); border-left: 1.5px solid var(--cyan); border-right: 1.5px solid var(--cyan); pointer-events: none; }
+    #sl-app .j-group-tight { display: inline-flex; align-items: center; gap: 4px; }
+    #sl-app .u1 { display: inline-flex; align-items: center; gap: 5px; border-bottom: 2px solid #cbd5e1; padding-bottom: 2px; }
+    #sl-app .u2-inner { display: inline-flex; align-items: center; gap: 4px; border-bottom: 2px solid #cbd5e1; padding-bottom: 2px; }
+    #sl-app .j-ev { position: relative; display: inline-flex; align-items: center; line-height: 1.05; transition: color 0.05s, transform 0.05s; }
+    #sl-app .j-ev.j-rest { color: var(--muted); }
+    #sl-app .j-ev.active-note { color: #ffffff !important; text-shadow: 0 0 12px var(--mint), 0 0 4px #fff; transform: translateY(-2px) scale(1.18); }
+    #sl-app .j-dash { font-family: system-ui, sans-serif; font-weight: 700; margin-left: 3px; color: var(--muted); font-size: 0.88em; }
+    #sl-app .j-dot { font-weight: 900; margin-left: 1px; }
+    #sl-app .triplet { position: relative; display: inline-flex; align-items: center; }
+    #sl-app .triplet::before { content: "3"; position: absolute; top: -18px; left: 50%; transform: translateX(-50%); font-family: var(--mono); font-size: 10px; font-weight: 800; color: var(--cyan); line-height: 1; }
+    #sl-app .triplet::after { content: ""; position: absolute; top: -7px; left: 1px; right: 1px; height: 4px; border-top: 1.5px solid var(--cyan); border-left: 1.5px solid var(--cyan); border-right: 1.5px solid var(--cyan); pointer-events: none; }
 
-    .hidden { display: none !important; }
+    #sl-app .hidden { display: none !important; }
   </style>
 </head>
-<body>
-  <div class="app">
+<body class="sl-body">
+  <div id="sl-app" class="sl-app">
     <header class="topbar">
       <div class="brand">
         <span class="brand-sq"></span>
@@ -312,7 +303,9 @@
           </div>
         </div>
 
-        <div id="score-pane"></div>
+        <div class="sl-score-box">
+          <div id="score-pane"></div>
+        </div>
         <div id="code-pane-hidden" style="display:none;"></div>
       </div>
     </section>
@@ -380,7 +373,7 @@
         await window.__dolceEngine.mount({
           scorePane: document.getElementById('score-pane'),
           hiddenCodePane: document.getElementById('code-pane-hidden'),
-          statusEl: document.getElementById('omrStatusText'),
+          statusEl: null,
           playBtn: document.getElementById('myBtnPlay'),
           stopBtn: document.getElementById('myBtnStop'),
           progressEl: document.getElementById('myProgress'),
@@ -452,7 +445,7 @@
         const tag = readStr(4), trkLen = dv.getUint32(pos); pos += 4;
         const trkEnd = Math.min(dv.byteLength, pos + trkLen);
         if (tag !== 'MTrk') { pos = trkEnd; continue; }
-        let tick = 0, runningStatus = 0, trkName = '';
+        let tick = 0, runningStatus = 0;
         const activeNotes = new Map(), notes = [];
 
         while (pos < trkEnd) {
@@ -470,9 +463,6 @@
               timeSigMap.push({ tick, num: dv.getUint8(pos), den: Math.pow(2, dv.getUint8(pos + 1)) });
             } else if (metaType === 0x59 && len >= 2) {
               keySigMap.push({ tick, sf: dv.getInt8(pos), mi: dv.getUint8(pos + 1) });
-            } else if (metaType === 0x03) {
-              let s = ''; for (let i = 0; i < len; i++) s += String.fromCharCode(dv.getUint8(pos + i));
-              if (s.trim()) trkName = s.trim();
             }
             pos += len;
           } else if (status === 0xf0 || status === 0xf7) {
