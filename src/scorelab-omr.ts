@@ -1,3 +1,4 @@
+
 import "./styles.css";
 import { MetaData } from "./smufl/smufl";
 import { setMeasureBackend } from "./common/measure";
@@ -22,6 +23,10 @@ export interface ScoreSnapshot {
   text: string;
   viewMode: ViewMode;
 }
+
+const AUTOSAVE_DB_NAME = "scorelab_autosave_db";
+const AUTOSAVE_STORE = "drafts";
+const AUTOSAVE_LS_KEY = "scorelab_last_score_v1";
 
 const S2T_MAP: Record<string, string> = {
   "编": "編", "辑": "輯", "节": "節", "拍": "拍", "数": "數", "处": "處",
@@ -57,6 +62,117 @@ function toTraditionalUi(s: string): string {
     out += S2T_MAP[ch] ?? ch;
   }
   return out;
+}
+
+// ---- IndexedDB + localStorage 自動儲存／還原 ----
+function openAutosaveDb(): Promise<IDBDatabase | null> {
+  if (typeof indexedDB === "undefined") return Promise.resolve(null);
+  return new Promise((resolve) => {
+    try {
+      const req = indexedDB.open(AUTOSAVE_DB_NAME, 1);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(AUTOSAVE_STORE)) {
+          db.createObjectStore(AUTOSAVE_STORE, { keyPath: "id" });
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+async function writeAutosaveSnapshot(snap: ScoreSnapshot): Promise<boolean> {
+  const payload = { id: "current", ...snap, updatedAt: Date.now() };
+  try {
+    localStorage.setItem(
+      AUTOSAVE_LS_KEY,
+      JSON.stringify(
+        snap.text.length <= 250_000
+          ? payload
+          : { id: "current", title: snap.title, format: snap.format, viewMode: snap.viewMode, updatedAt: payload.updatedAt },
+      ),
+    );
+  } catch {
+    // 忽略配額限制
+  }
+
+  const db = await openAutosaveDb();
+  if (!db) return true;
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(AUTOSAVE_STORE, "readwrite");
+      tx.objectStore(AUTOSAVE_STORE).put(payload);
+      tx.oncomplete = () => resolve(true);
+      tx.onerror = () => resolve(false);
+    } catch {
+      resolve(false);
+    }
+  });
+}
+
+async function readAutosaveSnapshot(): Promise<ScoreSnapshot | null> {
+  const db = await openAutosaveDb();
+  if (db) {
+    const rec = await new Promise<ScoreSnapshot | null>((resolve) => {
+      try {
+        const tx = db.transaction(AUTOSAVE_STORE, "readonly");
+        const req = tx.objectStore(AUTOSAVE_STORE).get("current");
+        req.onsuccess = () => {
+          const r = req.result;
+          if (r && typeof r.text === "string" && r.text.length > 0) {
+            resolve({
+              title: r.title || "已儲存樂譜",
+              format: r.format || "musicxml",
+              text: r.text,
+              viewMode: r.viewMode || "staff",
+            });
+          } else {
+            resolve(null);
+          }
+        };
+        req.onerror = () => resolve(null);
+      } catch {
+        resolve(null);
+      }
+    });
+    if (rec) return rec;
+  }
+
+  try {
+    const raw = localStorage.getItem(AUTOSAVE_LS_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed.text === "string" && parsed.text.length > 0) {
+      return {
+        title: parsed.title || "已儲存樂譜",
+        format: parsed.format || "musicxml",
+        text: parsed.text,
+        viewMode: parsed.viewMode || "staff",
+      };
+    }
+  } catch {}
+  return null;
+}
+
+async function clearAutosaveSnapshot(): Promise<void> {
+  try {
+    localStorage.removeItem(AUTOSAVE_LS_KEY);
+  } catch {}
+  const db = await openAutosaveDb();
+  if (!db) return;
+  await new Promise<void>((resolve) => {
+    try {
+      const tx = db.transaction(AUTOSAVE_STORE, "readwrite");
+      tx.objectStore(AUTOSAVE_STORE).delete("current");
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    } catch {
+      resolve();
+    }
+  });
 }
 
 async function registerBravura() {
@@ -95,13 +211,6 @@ function isAlreadyCleanWhiteBg(data: Uint8ClampedArray, w: number, h: number): b
   return total > 0 && brightWhite / total >= 0.82 && dimGrayBg / total <= 0.08;
 }
 
-/**
- * 將手拍照片或過大圖檔做「尺寸上限控管」＋「陰影光影去除」＋「白底黑字對比強化」：
- * 1. 限制最大長邊與總像素上限，避免超高畫素照片拖慢辨識，同時保留譜線、符頭與細小跳轉記號精度。
- * 2. 若偵測到陰影／偏暗紙張，透過局部網格估測紙張底色並雙線性內插，將底色還原為純白、符號強化為深黑，
- *    並放寬黑白裁切區間以免吃掉 D.S. / Coda / 1. / 2. 等小字。
- * 3. 優先輸出無損 PNG 保留字跡與記號銳利度。
- */
 function enhanceScoreContrast(ctx: CanvasRenderingContext2D, w: number, h: number): boolean {
   const imgData = ctx.getImageData(0, 0, w, h);
   const data = imgData.data;
@@ -311,6 +420,7 @@ export interface MountShellOptions {
   onZoomChange?: (zoom: number) => void;
   onRangeChange?: (state: { active: boolean; picking: boolean; hasStart: boolean }) => void;
   onEditModeChange?: (editing: boolean, committed?: boolean) => void;
+  onViewModeChange?: (mode: ViewMode) => void;
 }
 
 let _appPromise: Promise<App> | null = null;
@@ -319,9 +429,11 @@ let _scorePane: HTMLElement | null = null;
 let _progressEl: HTMLInputElement | null = null;
 let _editToggleBtn: HTMLButtonElement | null = null;
 let _editPanel: HTMLElement | null = null;
+let _selInfoEl: HTMLElement | null = null;
 let _onZoomChange: ((z: number) => void) | undefined;
 let _onRangeChange: MountShellOptions["onRangeChange"];
 let _onEditModeChange: MountShellOptions["onEditModeChange"];
+let _onViewModeChange: MountShellOptions["onViewModeChange"];
 let _loadGen = 0;
 let _editMode = false;
 let _editBackup: { format: DocFormatId; text: string; viewMode: ViewMode } | null = null;
@@ -340,16 +452,25 @@ function notifyRange() {
   });
 }
 
-function captureSnapshot(): { format: DocFormatId; text: string; viewMode: ViewMode } | null {
+function getCurrentSnapshot(): ScoreSnapshot | null {
   if (!_app || _app.pageEls.length === 0) return null;
+  const rawTitle = (_app.documentTitle() || "").trim();
+  const title = rawTitle && rawTitle !== "未命名" ? rawTitle : "已儲存樂譜";
   return {
+    title,
     format: _app.docFormat,
     text: _app.getText(),
     viewMode: _app.viewMode,
   };
 }
 
-async function restoreSnapshotInternal(snap: { format: DocFormatId; text: string; viewMode: ViewMode }) {
+async function persistCurrentScore(): Promise<boolean> {
+  const snap = getCurrentSnapshot();
+  if (!snap) return false;
+  return writeAutosaveSnapshot(snap);
+}
+
+async function restoreSnapshotInternal(snap: Pick<ScoreSnapshot, "format" | "text" | "viewMode">) {
   if (!_app) return;
   cleanupSustainCursor(_scorePane);
   _app.stopPlayback();
@@ -362,11 +483,13 @@ async function restoreSnapshotInternal(snap: { format: DocFormatId; text: string
   const targetMode = snap.viewMode === "original" ? "expanded" : snap.viewMode;
   await _app.setViewMode(targetMode);
   await _app.whenIdle();
+  _onViewModeChange?.(_app.viewMode);
 }
 
 function enterEditMode() {
   if (_editMode) return;
-  _editBackup = captureSnapshot();
+  const snap = getCurrentSnapshot();
+  _editBackup = snap ? { format: snap.format, text: snap.text, viewMode: snap.viewMode } : null;
   _editMode = true;
   if (_editToggleBtn) {
     _editToggleBtn.classList.add("active");
@@ -385,6 +508,11 @@ function enterEditMode() {
   if (_app) {
     _app.visual.beatCheck = true;
     _app.visual.afterRebuild();
+    const selTxt = (_selInfoEl?.textContent || "").trim();
+    if (!selTxt || /未選|無選/.test(selTxt)) {
+      _app.visual.runById("nav.next", "");
+    }
+    _onViewModeChange?.(_app.viewMode);
     _scorePane?.focus({ preventScroll: true });
   }
   _onEditModeChange?.(true, false);
@@ -405,6 +533,7 @@ function commitEditMode() {
     _app.visual.afterRebuild();
     if (_scorePane) hideDiagnosticOverlays(_scorePane);
   }
+  void persistCurrentScore();
   _onEditModeChange?.(false, true);
 }
 
@@ -428,6 +557,214 @@ async function cancelEditMode() {
     if (_scorePane) hideDiagnosticOverlays(_scorePane);
   }
   _onEditModeChange?.(false, false);
+}
+
+// ---- MusicXML 小節結構／調號／拍號／速度／換行／換頁 後備修改器 ----
+const KEY_NAME_TO_FIFTHS: Record<string, number> = {
+  C: 0, AM: 0,
+  G: 1, EM: 1,
+  D: 2, BM: 2,
+  A: 3, "F#M": 3,
+  E: 4, "C#M": 4,
+  B: 5, "G#M": 5, CB: -7,
+  "F#": 6, "D#M": 6, GB: -6, EBM: -6,
+  "C#": 7, "A#M": 7, DB: -5, BBM: -5,
+  F: -1, DM: -1,
+  BB: -2, GM: -2,
+  EB: -3, CM: -3,
+  AB: -4, FM: -4,
+};
+
+function parseKeyFifthsInput(raw: string): number | null {
+  const s = raw.trim().toUpperCase().replace(/\s+/g, "");
+  if (!s) return null;
+  if (/^[+-]?\d+$/.test(s)) {
+    const n = Number(s);
+    return n >= -7 && n <= 7 ? n : null;
+  }
+  const norm = s.replace(/MAJOR|MAJ/g, "").replace(/MINOR|MIN/g, "M");
+  if (norm in KEY_NAME_TO_FIFTHS) return KEY_NAME_TO_FIFTHS[norm]!;
+  return null;
+}
+
+function getSelectedMeasureNumber(totalMeasures: number): number {
+  const txt = (_selInfoEl?.textContent || "").trim();
+  const m = txt.match(/第\s*(\d+)\s*小節/) || txt.match(/\bm\.?\s*(\d+)\b/i) || txt.match(/(\d+)/);
+  if (m) {
+    const num = Number(m[1]);
+    if (num >= 1 && num <= totalMeasures) return num;
+  }
+  return 1;
+}
+
+function ensureChildEl(doc: XMLDocument, parent: Element, tagName: string, prepend = false): Element {
+  const found = Array.from(parent.children).find((c) => c.tagName === tagName);
+  if (found) return found;
+  const el = doc.createElement(tagName);
+  if (prepend && parent.firstChild) parent.insertBefore(el, parent.firstChild);
+  else parent.appendChild(el);
+  return el;
+}
+
+async function applyMusicXmlFallbackAction(id: string, key = ""): Promise<boolean> {
+  if (!_app || _app.docFormat !== "musicxml") return false;
+  const rawXml = _app.getText();
+  if (!rawXml) return false;
+
+  const parser = new DOMParser();
+  const xmlDoc = parser.parseFromString(rawXml, "application/xml");
+  if (xmlDoc.querySelector("parsererror")) return false;
+
+  const parts = Array.from(xmlDoc.querySelectorAll("score-partwise > part"));
+  if (!parts.length) return false;
+  const firstPartMeasures = Array.from(parts[0]!.children).filter((c) => c.tagName === "measure");
+  if (!firstPartMeasures.length) return false;
+
+  const selMeasNum = getSelectedMeasureNumber(firstPartMeasures.length);
+  const targetIdx = Math.max(0, Math.min(firstPartMeasures.length - 1, selMeasNum - 1));
+  let changed = false;
+
+  if (id === "meas.key") {
+    const input = key || window.prompt("輸入調號（例如 C、G、D、F、Bb、Eb 或升記號數 -7 ~ 7）：", "C");
+    if (input === null) return false;
+    const fifths = parseKeyFifthsInput(input);
+    if (fifths === null) {
+      window.alert("無法辨識調號，請輸入如 C、G、F、Bb、Am 或 -7 到 7。");
+      return false;
+    }
+    for (const part of parts) {
+      const measures = Array.from(part.children).filter((c) => c.tagName === "measure");
+      const mEl = measures[targetIdx] ?? measures[0];
+      if (!mEl) continue;
+      const attrs = ensureChildEl(xmlDoc, mEl, "attributes", true);
+      const keyEl = ensureChildEl(xmlDoc, attrs, "key");
+      const fifthsEl = ensureChildEl(xmlDoc, keyEl, "fifths");
+      fifthsEl.textContent = String(fifths);
+    }
+    changed = true;
+  } else if (id === "meas.time") {
+    const input = key || window.prompt("輸入拍號（例如 4/4、3/4、2/4、6/8）：", "4/4");
+    if (input === null) return false;
+    const match = input.trim().match(/^(\d+)\s*\/\s*(\d+)$/);
+    if (!match) {
+      window.alert("拍號格式錯誤，請輸入如 4/4 或 3/4。");
+      return false;
+    }
+    const beats = Math.max(1, Math.min(16, Number(match[1])));
+    const beatType = [1, 2, 4, 8, 16, 32].includes(Number(match[2])) ? Number(match[2]) : 4;
+    for (const part of parts) {
+      const measures = Array.from(part.children).filter((c) => c.tagName === "measure");
+      const mEl = measures[targetIdx] ?? measures[0];
+      if (!mEl) continue;
+      const attrs = ensureChildEl(xmlDoc, mEl, "attributes", true);
+      const timeEl = ensureChildEl(xmlDoc, attrs, "time");
+      ensureChildEl(xmlDoc, timeEl, "beats").textContent = String(beats);
+      ensureChildEl(xmlDoc, timeEl, "beat-type").textContent = String(beatType);
+    }
+    changed = true;
+  } else if (id === "meas.tempo") {
+    const existingTempo =
+      xmlDoc.querySelector("sound[tempo]")?.getAttribute("tempo") ||
+      xmlDoc.querySelector("per-minute")?.textContent ||
+      "100";
+    const input = key || window.prompt("輸入速度 BPM（40 ~ 240）：", existingTempo);
+    if (input === null) return false;
+    const bpm = Math.round(Number(input.trim()));
+    if (!Number.isFinite(bpm) || bpm < 30 || bpm > 280) {
+      window.alert("請輸入 30 ~ 280 之間的速度數值。");
+      return false;
+    }
+    const mEl = firstPartMeasures[targetIdx] ?? firstPartMeasures[0]!;
+    let soundEl = mEl.querySelector("sound[tempo]");
+    if (!soundEl) {
+      soundEl = xmlDoc.createElement("sound");
+      mEl.insertBefore(soundEl, mEl.firstChild);
+    }
+    soundEl.setAttribute("tempo", String(bpm));
+
+    const perMinEl = mEl.querySelector("direction direction-type metronome per-minute");
+    if (perMinEl) {
+      perMinEl.textContent = String(bpm);
+    }
+    changed = true;
+  } else if (id === "brk.line" || id === "brk.page") {
+    const attrName = id === "brk.line" ? "new-system" : "new-page";
+    const breakIdx = targetIdx === 0 && firstPartMeasures.length > 1 ? 1 : targetIdx;
+    if (breakIdx === 0) return false;
+    for (const part of parts) {
+      const measures = Array.from(part.children).filter((c) => c.tagName === "measure");
+      const mEl = measures[breakIdx];
+      if (!mEl) continue;
+      let printEl = Array.from(mEl.children).find((c) => c.tagName === "print");
+      if (!printEl) {
+        printEl = xmlDoc.createElement("print");
+        mEl.insertBefore(printEl, mEl.firstChild);
+      }
+      const cur = printEl.getAttribute(attrName) === "yes";
+      if (cur) {
+        printEl.removeAttribute(attrName);
+      } else {
+        printEl.setAttribute(attrName, "yes");
+      }
+    }
+    changed = true;
+  } else if (id === "meas.append") {
+    let divs = 4;
+    let beats = 4;
+    let beatType = 4;
+    for (const m of firstPartMeasures) {
+      const d = m.querySelector("attributes > divisions")?.textContent;
+      if (d && Number(d) > 0) divs = Number(d);
+      const b = m.querySelector("attributes > time > beats")?.textContent;
+      const bt = m.querySelector("attributes > time > beat-type")?.textContent;
+      if (b && bt) {
+        beats = Number(b);
+        beatType = Number(bt);
+      }
+    }
+    const measDur = Math.max(1, Math.round(beats * (4 / beatType) * divs));
+    for (const part of parts) {
+      const measures = Array.from(part.children).filter((c) => c.tagName === "measure");
+      const newMeas = xmlDoc.createElement("measure");
+      newMeas.setAttribute("number", String(measures.length + 1));
+      const note = xmlDoc.createElement("note");
+      note.appendChild(xmlDoc.createElement("rest"));
+      const dur = xmlDoc.createElement("duration");
+      dur.textContent = String(measDur);
+      note.appendChild(dur);
+      const voice = xmlDoc.createElement("voice");
+      voice.textContent = "1";
+      note.appendChild(voice);
+      newMeas.appendChild(note);
+      part.appendChild(newMeas);
+    }
+    changed = true;
+  } else if (id === "meas.delete") {
+    if (firstPartMeasures.length <= 1) return false;
+    for (const part of parts) {
+      const measures = Array.from(part.children).filter((c) => c.tagName === "measure");
+      const target = measures[targetIdx];
+      if (target) target.remove();
+      const restMeasures = Array.from(part.children).filter((c) => c.tagName === "measure");
+      restMeasures.forEach((m, i) => m.setAttribute("number", String(i + 1)));
+    }
+    changed = true;
+  }
+
+  if (!changed) return false;
+
+  const newXml = new XMLSerializer().serializeToString(xmlDoc);
+  const keepView = _app.viewMode;
+  if (_app.adoptStaffXml(newXml)) {
+    await _app.setViewMode(keepView);
+    await _app.whenIdle();
+    if (_scorePane) hideDiagnosticOverlays(_scorePane);
+    _app.visual.afterRebuild();
+    _onViewModeChange?.(_app.viewMode);
+    _scorePane?.focus({ preventScroll: true });
+    return true;
+  }
+  return false;
 }
 
 function observeTraditionalText(el: HTMLElement | null | undefined) {
@@ -794,7 +1131,6 @@ function cleanupSustainCursor(scorePane?: HTMLElement | null) {
   _sustainState = null;
 }
 
-/** 取得簡譜音符數字本體框、垂直中心與高度（避免共用減時線／弧線／八度點拉寬或拉偏基準） */
 function getNoteCoreMetrics(
   el: SVGGraphicsElement,
   invSvgCtm: DOMMatrix,
@@ -970,7 +1306,6 @@ function findSustainBoxesForNote(
   return chosen;
 }
 
-/** 搜尋緊接在當前音符後、下一個音符前的所有簡譜休止符 0（支援同小節、跨小節與換行／換頁） */
 function findFollowingRestTargets(
   scorePane: HTMLElement,
   info: NonNullable<ReturnType<typeof getTimeline>>,
@@ -1053,7 +1388,6 @@ function findFollowingRestTargets(
       candidateBoxes.push({ box: b, restId: null });
     }
 
-    // 去重：避免父子 <g> 或重疊節點重複收錄同一個 0
     const deduped: { box: Box2D; restId: ElementId | null }[] = [];
     for (const cand of candidateBoxes) {
       const cx = (cand.box.minX + cand.box.maxX) * 0.5;
@@ -1110,7 +1444,6 @@ function findFollowingRestTargets(
     }
   }
 
-  // 以垂直容差聚類分列後再依 X 由左至右排序，徹底避免跨行半格進位導致順序錯亂
   collected.sort((a, b) => a.svgIdx - b.svgIdx || a.midY - b.midY);
   const withRow: (typeof collected[number] & { rowGroup: number })[] = [];
   let rowGroup = 0;
@@ -1319,7 +1652,6 @@ function updateSustainCursor(
     }
   }
 
-  // 同場比較獨立的「0」與「—」文字，若游標中心更靠近 0 / — 則代表官方游標已在該拍上
   for (const txt of svg.querySelectorAll<SVGTextElement>("text")) {
     const content = txt.textContent || "";
     if (!isRestZeroText(content) && !isSustainDashText(content)) continue;
@@ -1788,19 +2120,12 @@ function applyAbLoopByIds(idA: ElementId, idB: ElementId): boolean {
   return true;
 }
 
-/**
- * 選段互動（電腦＋手機無衝突設計；修譜模式開啟時暫讓給可視化編輯）：
- * - 手機/觸控螢幕：正常滑動可順暢捲動樂譜；「長按約 350ms 設定起點 → 不離手直接拖曳至終點 → 放開完成選段」。
- *   （若先點擊工具列的「選段」SVG 鍵，則直接觸控拖曳即可選段，無需長按）
- * - 電腦滑鼠：直接左鍵按住拖曳（起點拖至終點）即可完成選段。
- */
 function wireDirectScoreSelection(scorePane: HTMLElement) {
   const LONG_PRESS_MS = 350;
   const MOVE_CANCEL_PX = 10;
 
   let suppressClick = false;
 
-  // ---- 1. 滑鼠拖曳選段 ----
   let mouseStart: { x: number; y: number; startId: ElementId | null } | null = null;
   let mouseDragging = false;
 
@@ -1900,7 +2225,6 @@ function wireDirectScoreSelection(scorePane: HTMLElement) {
     notifyRange();
   });
 
-  // ---- 2. 手機／觸控：長按設起點 → 拖曳至終點（與單指捲動、雙指縮放零衝突） ----
   let touchTimer: number | null = null;
   let touchActive = false;
   let touchStartPt: { x: number; y: number } | null = null;
@@ -2094,10 +2418,12 @@ async function initEngine(opts: MountShellOptions): Promise<App> {
   _onZoomChange = opts.onZoomChange;
   _onRangeChange = opts.onRangeChange;
   _onEditModeChange = opts.onEditModeChange;
+  _onViewModeChange = opts.onViewModeChange;
   _scorePane = opts.scorePane;
   _progressEl = opts.progressEl ?? null;
   _editToggleBtn = opts.editToggleBtn ?? null;
   _editPanel = opts.editPanel ?? null;
+  _selInfoEl = opts.visualEls?.selInfo ?? null;
   if (_app) return _app;
   if (_appPromise) return _appPromise;
 
@@ -2105,7 +2431,6 @@ async function initEngine(opts: MountShellOptions): Promise<App> {
     initLang();
     setMeasureBackend(browserMeasure);
 
-    // 啟動即並行預載 OMR Runtime、SMuFL 中繼資料與樂譜字型，縮短手機冷啟動時間
     const runtimePrep = import("./omrkit/runtime.browser")
       .then((m) => m.browserRuntime.prepare("det"))
       .catch(() => {});
@@ -2125,7 +2450,6 @@ async function initEngine(opts: MountShellOptions): Promise<App> {
     app.statusEl = opts.statusEl ?? null;
     app.loadSettings();
 
-    // 掛載原版可視化修譜核心（停用其簡體內建按鈕牆，改由我們繁體分區面板呼叫 runVisualAction）
     if (opts.visualEls) {
       app.visual.attach({
         ...opts.visualEls,
@@ -2183,11 +2507,14 @@ async function initEngine(opts: MountShellOptions): Promise<App> {
           await app.setViewMode(mode);
           hideDiagnosticOverlays(opts.scorePane);
           app.visual.afterRebuild();
+          _onViewModeChange?.(app.viewMode);
+          if (!_editMode) void persistCurrentScore();
         });
       }
       if (opts.viewSwitch) app.setViewModeButtons(opts.viewSwitch, opts.viewBtns);
     }
 
+    preserveIconButton(opts.editToggleBtn);
     opts.editToggleBtn?.addEventListener("click", () => {
       if (_editMode) {
         void cancelEditMode();
@@ -2274,7 +2601,6 @@ async function recognizeAndRender(
 
   onProgress(null);
 
-  // 單一非圖片/PDF 譜檔直接由官方解析渲染
   if (files.length === 1 && !firstName.endsWith(".pdf") && !/\.(png|jpe?g|webp)$/i.test(firstName)) {
     onProgress(0.45);
     const bytes = new Uint8Array(await first.arrayBuffer());
@@ -2289,6 +2615,8 @@ async function recognizeAndRender(
     }
     if (_scorePane) hideDiagnosticOverlays(_scorePane);
     _app.visual.afterRebuild();
+    _onViewModeChange?.(_app.viewMode);
+    void persistCurrentScore();
     onProgress(1);
     return { engine: "native-doc", info: "" };
   }
@@ -2296,7 +2624,6 @@ async function recognizeAndRender(
   let xml = "";
   let engine = "";
 
-  // 1. 單一 PDF 矢量 / 轉曲五線譜
   if (files.length === 1 && kind !== "jianpu") {
     const firstBytes = new Uint8Array(await first.arrayBuffer());
     if (isPdf(firstBytes, first.type || undefined)) {
@@ -2341,7 +2668,6 @@ async function recognizeAndRender(
     }
   }
 
-  // 2. 位圖五線譜（支援多張圖片：先辨識第 1 頁立即顯示，再補齊全曲）
   if (!xml && kind !== "jianpu") {
     onProgress(0.12);
     const rb = await import("./rasteromr/browser");
@@ -2375,6 +2701,7 @@ async function recognizeAndRender(
           await _app.whenIdle();
           if (_app.pageEls.length > 0) {
             if (_scorePane) hideDiagnosticOverlays(_scorePane);
+            _onViewModeChange?.(_app.viewMode);
             showedFirst = true;
             opts.onFirstPageReady?.();
           }
@@ -2398,7 +2725,6 @@ async function recognizeAndRender(
     }
   }
 
-  // 3. 簡譜圖片 / 掃描簡譜 PDF
   if (!xml) {
     onProgress(null);
     const isImg = /\.(png|jpe?g|webp)$/i.test(first.name) || first.type.startsWith("image/");
@@ -2432,6 +2758,8 @@ async function recognizeAndRender(
   }
   if (_scorePane) hideDiagnosticOverlays(_scorePane);
   _app.visual.afterRebuild();
+  _onViewModeChange?.(_app.viewMode);
+  void persistCurrentScore();
   onProgress(1);
 
   return { engine, info: "" };
@@ -2446,11 +2774,15 @@ declare global {
       loadXmlText: (xml: string, viewMode?: ViewMode) => Promise<void>;
       getSnapshot: () => ScoreSnapshot | null;
       loadSnapshot: (snap: Pick<ScoreSnapshot, "format" | "text" | "viewMode">) => Promise<void>;
+      saveCurrentScore: () => Promise<boolean>;
+      restoreLastScore: () => Promise<ScoreSnapshot | null>;
+      clearLastScore: () => Promise<void>;
       setEditMode: (on: boolean) => void;
       commitEditMode: () => void;
       cancelEditMode: () => Promise<void>;
       isEditMode: () => boolean;
-      runVisualAction: (id: string, key?: string) => boolean;
+      getViewMode: () => ViewMode | null;
+      runVisualAction: (id: string, key?: string) => Promise<boolean>;
       toggleRangePick: () => void;
       clearRangeLoop: () => void;
       setViewMode: (m: ViewMode) => Promise<void>;
@@ -2487,17 +2819,11 @@ window.__dolceEngine = {
     }
     if (_scorePane) hideDiagnosticOverlays(_scorePane);
     _app.visual.afterRebuild();
+    _onViewModeChange?.(_app.viewMode);
+    void persistCurrentScore();
   },
   getSnapshot() {
-    if (!_app || _app.pageEls.length === 0) return null;
-    const rawTitle = (_app.documentTitle() || "").trim();
-    const title = rawTitle && rawTitle !== "未命名" ? rawTitle : "已儲存樂譜";
-    return {
-      title,
-      format: _app.docFormat,
-      text: _app.getText(),
-      viewMode: _app.viewMode,
-    };
+    return getCurrentSnapshot();
   },
   async loadSnapshot(snap) {
     if (!_app) return;
@@ -2522,6 +2848,29 @@ window.__dolceEngine = {
     }
     if (_scorePane) hideDiagnosticOverlays(_scorePane);
     _app.visual.afterRebuild();
+    _onViewModeChange?.(_app.viewMode);
+    void persistCurrentScore();
+  },
+  async saveCurrentScore() {
+    return persistCurrentScore();
+  },
+  async restoreLastScore() {
+    if (!_app) return null;
+    const saved = await readAutosaveSnapshot();
+    if (!saved) return null;
+    try {
+      await restoreSnapshotInternal(saved);
+      if (_app.pageEls.length === 0) return null;
+      if (_scorePane) hideDiagnosticOverlays(_scorePane);
+      _app.visual.afterRebuild();
+      _onViewModeChange?.(_app.viewMode);
+      return saved;
+    } catch {
+      return null;
+    }
+  },
+  async clearLastScore() {
+    await clearAutosaveSnapshot();
   },
   setEditMode(on) {
     if (on) enterEditMode();
@@ -2536,10 +2885,35 @@ window.__dolceEngine = {
   isEditMode() {
     return _editMode;
   },
-  runVisualAction(id, key = "") {
+  getViewMode() {
+    return _app ? _app.viewMode : null;
+  },
+  async runVisualAction(id, key = "") {
     if (!_app || !_editMode) return false;
     if (!_app.syncFresh()) _app.reloadNow();
+
+    // 若尚未選取音符且非純導覽指令，先自動選取第一個元素，避免無選取導致動作無效
+    if (!id.startsWith("nav.") && !id.startsWith("edit.") && !id.startsWith("mode.")) {
+      const selTxt = (_selInfoEl?.textContent || "").trim();
+      if (!selTxt || /未選|無選/.test(selTxt)) {
+        _app.visual.runById("nav.next", "");
+      }
+    }
+
+    const beforeText = _app.getText();
     const ok = _app.visual.runById(id, key);
+    const changed = _app.getText() !== beforeText;
+
+    // 針對調號、拍號、速度、換行、換頁、增刪小節，若底層未處理則以 MusicXML 後備方案執行
+    if (
+      (!ok || (!changed && ["meas.key", "meas.time", "meas.tempo", "brk.line", "brk.page", "meas.append", "meas.delete"].includes(id))) &&
+      ["meas.key", "meas.time", "meas.tempo", "brk.line", "brk.page", "meas.append", "meas.delete"].includes(id)
+    ) {
+      const fbOk = await applyMusicXmlFallbackAction(id, key);
+      _scorePane?.focus({ preventScroll: true });
+      return fbOk;
+    }
+
     _scorePane?.focus({ preventScroll: true });
     return ok;
   },
@@ -2563,6 +2937,8 @@ window.__dolceEngine = {
     await _app.setViewMode(m);
     if (_scorePane) hideDiagnosticOverlays(_scorePane);
     _app.visual.afterRebuild();
+    _onViewModeChange?.(_app.viewMode);
+    if (!_editMode) void persistCurrentScore();
   },
   async exportXml() {
     return _app ? _app.musicXmlForSave() : "";
