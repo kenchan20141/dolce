@@ -1782,7 +1782,7 @@ async function recognizeAndRender(
   filesInput: File | readonly File[],
   opts: {
     kind?: OmrKind;
-    onProgress?: (msg: string) => void;
+    onProgress?: (ratio: number | null) => void;
     onFirstPageReady?: () => void;
   } = {},
 ): Promise<{ engine: string; info: string }> {
@@ -1801,10 +1801,14 @@ async function recognizeAndRender(
   const first = files[0]!;
   const firstName = first.name.toLowerCase();
 
+  onProgress(null);
+
   // 單一非圖片/PDF 譜檔直接由官方解析渲染
   if (files.length === 1 && !firstName.endsWith(".pdf") && !/\.(png|jpe?g|webp)$/i.test(firstName)) {
+    onProgress(0.45);
     const bytes = new Uint8Array(await first.arrayBuffer());
     _app.importBytes(bytes, first.name);
+    onProgress(0.8);
     await _app.whenIdle();
     if (/\.(xml|musicxml)$/i.test(firstName) && _app.mode === "jp") {
       await _app.setViewMode("staff");
@@ -1813,6 +1817,7 @@ async function recognizeAndRender(
       throw new Error(_app.status || "無法解析此樂譜檔案");
     }
     if (_scorePane) hideDiagnosticOverlays(_scorePane);
+    onProgress(1);
     return { engine: "native-doc", info: "" };
   }
 
@@ -1823,7 +1828,7 @@ async function recognizeAndRender(
   if (files.length === 1 && kind !== "jianpu") {
     const firstBytes = new Uint8Array(await first.arrayBuffer());
     if (isPdf(firstBytes, first.type || undefined)) {
-      onProgress("分析 PDF 結構中...");
+      onProgress(0.15);
       const sb = await import("./staffomr/browser");
       let pdfDoc: Awaited<ReturnType<typeof sb.openStaffPdf>> | null = null;
       try {
@@ -1835,7 +1840,7 @@ async function recognizeAndRender(
         try {
           if (await sb.isStaffPdf(pdfDoc.pdf, pdfDoc.OPS)) {
             const res = await sb.recognizeStaffPdf(pdfDoc, {
-              onProgress: (d, t) => onProgress(`辨識第 ${d}/${t} 頁...`),
+              onProgress: (d, t) => onProgress(0.2 + 0.72 * (d / Math.max(1, t))),
               noteIds: false,
             });
             if (myGen !== _loadGen) return { engine: "cancelled", info: "" };
@@ -1847,7 +1852,7 @@ async function recognizeAndRender(
             const ob = await import("./outlineomr/browser");
             if (await ob.isOutlinedStaffPdf(pdfDoc.pdf, pdfDoc.OPS)) {
               const res = await ob.recognizeOutlinedPdf(pdfDoc, {
-                onProgress: (d, t) => onProgress(`辨識第 ${d}/${t} 頁...`),
+                onProgress: (d, t) => onProgress(0.2 + 0.72 * (d / Math.max(1, t))),
                 noteIds: false,
               });
               if (myGen !== _loadGen) return { engine: "cancelled", info: "" };
@@ -1866,28 +1871,28 @@ async function recognizeAndRender(
 
   // 2. 位圖五線譜（支援多張圖片：先辨識第 1 頁立即顯示，再補齊全曲）
   if (!xml && kind !== "jianpu") {
-    onProgress("載入樂譜引擎...");
+    onProgress(0.12);
     const rb = await import("./rasteromr/browser");
     const rasterPdfs: Uint8Array[] = [];
 
     for (let i = 0; i < files.length; i++) {
       if (myGen !== _loadGen) return { engine: "cancelled", info: "" };
       const f = files[i]!;
-      onProgress(files.length > 1 ? `最佳化第 ${i + 1}/${files.length} 頁圖檔...` : "最佳化圖檔中...");
+      onProgress(0.15 + 0.15 * ((i + 1) / files.length));
       const isImg = /\.(png|jpe?g|webp)$/i.test(f.name) || f.type.startsWith("image/");
       const opt = isImg ? await maybeOptimizeImage(f) : { bytes: new Uint8Array(await f.arrayBuffer()), mime: f.type || undefined };
       rasterPdfs.push(await rb.asRasterPdf(opt.bytes, opt.mime));
     }
 
     if (myGen !== _loadGen) return { engine: "cancelled", info: "" };
-    onProgress("分析譜表結構...");
+    onProgress(0.34);
     const probe = kind === "staff" ? null : await rb.probeRasterStaff(rasterPdfs[0]!);
 
     if (!probe || probe.isStaff) {
       let showedFirst = false;
 
       if (rasterPdfs.length > 1) {
-        onProgress("辨識第 1 頁中...");
+        onProgress(0.4);
         const firstRes = await rb.recognizeRasterPdfs([rasterPdfs[0]!], {
           ...(probe?.pages ? { firstPages: new Map(probe.pages) } : {}),
           cancelled: () => myGen !== _loadGen,
@@ -1904,9 +1909,9 @@ async function recognizeAndRender(
         }
       }
 
-      onProgress(showedFirst ? `第 1 頁已顯示，辨識其餘 ${rasterPdfs.length - 1} 頁中...` : "辨識樂譜中...");
+      onProgress(showedFirst ? 0.52 : 0.45);
       const res = await rb.recognizeRasterPdfs(rasterPdfs, {
-        onPage: (d, t) => onProgress(showedFirst ? `第 1 頁已就緒，處理第 ${d}/${t} 頁...` : `辨識第 ${d}/${t} 頁...`),
+        onPage: (d, t) => onProgress(0.45 + 0.48 * (d / Math.max(1, t))),
         cancelled: () => myGen !== _loadGen,
         ...(probe?.pages ? { firstPages: new Map(probe.pages) } : {}),
       });
@@ -1923,11 +1928,12 @@ async function recognizeAndRender(
 
   // 3. 簡譜圖片 / 掃描簡譜 PDF
   if (!xml) {
-    onProgress("辨識簡譜中...");
+    onProgress(null);
     const isImg = /\.(png|jpe?g|webp)$/i.test(first.name) || first.type.startsWith("image/");
     const opt = isImg ? await maybeOptimizeImage(first) : { bytes: new Uint8Array(await first.arrayBuffer()), mime: first.type || undefined };
     const { score } = await recognizeMusicppDetailed(opt.bytes, opt.mime);
     if (myGen !== _loadGen) return { engine: "cancelled", info: "" };
+    onProgress(0.85);
     const out = omrEmitter("123").emit(score);
     if (out.kind !== "123") {
       throw new Error("簡譜轉出異常");
@@ -1936,6 +1942,7 @@ async function recognizeAndRender(
     engine = "jianpu";
   }
 
+  onProgress(0.95);
   const keepView = _app.pageEls.length > 0 ? _app.viewMode : null;
   if (!_app.adoptStaffXml(xml)) {
     throw new Error(_app.status || "樂譜無法渲染");
@@ -1952,6 +1959,7 @@ async function recognizeAndRender(
     throw new Error(_app.status || "樂譜渲染失敗");
   }
   if (_scorePane) hideDiagnosticOverlays(_scorePane);
+  onProgress(1);
 
   return { engine, info: "" };
 }
