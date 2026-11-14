@@ -311,7 +311,7 @@ function findNearestNoteId(
   return bestId;
 }
 
-// ---- 隱藏紅色／粉紅 OMR 拍數診斷色塊與 +♩ 徽章 ----
+// ---- 隱藏粉紅／紅色拍數診斷色塊與 +♩ 徽章（嚴格保護橙色動態播放游標） ----
 function parseRgbColor(colorStr: string | null | undefined): [number, number, number, number] | null {
   if (!colorStr || colorStr === "none" || colorStr === "transparent") return null;
   const m = colorStr.match(/rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)(?:\s*,\s*([\d.]+))?\s*\)/i);
@@ -319,62 +319,81 @@ function parseRgbColor(colorStr: string | null | undefined): [number, number, nu
   return [Number(m[1]), Number(m[2]), Number(m[3]), m[4] !== undefined ? Number(m[4]) : 1];
 }
 
-function isReddishColor(colorStr: string | null | undefined): boolean {
+/** 僅匹配粉紅／深紅診斷色（g 與 b 相近或 b 偏高），絕對排除橙色（g 明顯大於 b） */
+function isPinkDiagnosticColor(colorStr: string | null | undefined): boolean {
   const c = parseRgbColor(colorStr);
   if (!c || c[3] <= 0.01) return false;
   const [r, g, b] = c;
-  return r >= 165 && r - g >= 45 && r - b >= 45;
+  return r >= 165 && r - g >= 45 && g <= b + 28;
 }
 
+/** 匹配橙色動態播放游標（紅偏高、綠明顯高於藍） */
 function isOrangeCursorColor(colorStr: string | null | undefined): boolean {
   const c = parseRgbColor(colorStr);
   if (!c || c[3] <= 0.01) return false;
   const [r, g, b] = c;
-  return r >= 175 && g >= 65 && g <= 185 && b <= 135 && r - b >= 65;
+  return r >= 165 && g >= 60 && g <= 195 && b <= 140 && g - b >= 22 && r - g >= 15;
+}
+
+function isProtectedCursorEl(el: Element): boolean {
+  if (el.closest("[class*='cursor' i], [class*='playhead' i], [class*='caret' i]")) {
+    return true;
+  }
+  const st = getComputedStyle(el);
+  if (
+    isOrangeCursorColor(st.stroke) ||
+    isOrangeCursorColor(st.fill) ||
+    isOrangeCursorColor(st.borderColor) ||
+    isOrangeCursorColor(st.backgroundColor)
+  ) {
+    return true;
+  }
+  return false;
 }
 
 function hideDiagnosticOverlays(scorePane: HTMLElement): void {
   const pages = scorePane.querySelectorAll<HTMLElement>(".score-page-wrap");
   for (const page of pages) {
-    // 1. 隱藏 SVG 內的紅色虛線拍數警告框與 +♩ / -♩ 紅色提示文字
     for (const svg of page.querySelectorAll<SVGSVGElement>("svg")) {
+      // 1. 僅隱藏「虛線 + 粉紅/深紅」的拍數警告方框，實線方框與橙色游標完全不動
       for (const rect of svg.querySelectorAll<SVGRectElement>("rect")) {
         if (rect.classList.contains("sl-ab-band") || rect.classList.contains("sl-ab-marker")) continue;
+        if (isProtectedCursorEl(rect)) continue;
         const st = getComputedStyle(rect);
         const dash = rect.getAttribute("stroke-dasharray") || st.strokeDasharray;
         const hasDash = Boolean(dash && dash !== "none");
-        const reddishStroke = isReddishColor(st.stroke) || isReddishColor(rect.getAttribute("stroke"));
-        const reddishFill = isReddishColor(st.fill) || isReddishColor(rect.getAttribute("fill"));
-        if ((hasDash && (reddishStroke || reddishFill)) || (reddishStroke && reddishFill)) {
+        if (!hasDash) continue;
+        const pinkStroke = isPinkDiagnosticColor(st.stroke) || isPinkDiagnosticColor(rect.getAttribute("stroke"));
+        const pinkFill = isPinkDiagnosticColor(st.fill) || isPinkDiagnosticColor(rect.getAttribute("fill"));
+        if (pinkStroke || pinkFill) {
           rect.style.display = "none";
         }
       }
 
+      // 2. 僅隱藏粉紅/深紅的 +♩ / -♩ 診斷徽章文字與小音符圖示
       for (const txt of svg.querySelectorAll<SVGTextElement>("text")) {
+        if (isProtectedCursorEl(txt)) continue;
         const st = getComputedStyle(txt);
-        const reddish = isReddishColor(st.fill) || isReddishColor(txt.getAttribute("fill"));
-        if (!reddish) continue;
+        const pink = isPinkDiagnosticColor(st.fill) || isPinkDiagnosticColor(txt.getAttribute("fill"));
+        if (!pink) continue;
         const content = (txt.textContent || "").trim();
         if (/^[+\-−]/.test(content) || /[♩♪♫♬𝅝𝅗𝅥𝅘𝅥𝅘𝅥𝅮𝅘𝅥𝅯]/.test(content) || content.length <= 6) {
           txt.style.display = "none";
           const parentG = txt.parentElement;
           if (parentG && parentG.tagName.toLowerCase() === "g" && parentG.children.length <= 4) {
-            const pFill = getComputedStyle(parentG).fill;
-            if (isReddishColor(pFill) || parentG.querySelectorAll("rect, text, path").length <= 3) {
-              // 若整個 <g> 都是紅色診斷群組，一併隱藏其中的紅色音符符號（如 + ♩ 中的 ♩）
-              for (const child of parentG.children) {
-                const cst = getComputedStyle(child);
-                if (isReddishColor(cst.fill) || isReddishColor(cst.stroke)) {
-                  (child as SVGElement).style.display = "none";
-                }
+            for (const child of parentG.children) {
+              if (isProtectedCursorEl(child)) continue;
+              const cst = getComputedStyle(child);
+              if (isPinkDiagnosticColor(cst.fill) || isPinkDiagnosticColor(cst.stroke)) {
+                (child as SVGElement).style.display = "none";
               }
             }
           }
         }
       }
 
-      // 單獨以 <path> + 紅色畫出的診斷附帶小音符（例如緊貼在 + 旁的紅色 ♩ path）
       for (const g of svg.querySelectorAll<SVGGElement>("g")) {
+        if (isProtectedCursorEl(g)) continue;
         const cls = (g.getAttribute("class") || "").toLowerCase();
         if (/(err|warn|mismatch|overfill|underfill|beat-diff|diag)/.test(cls)) {
           const id = resolveNoteIdAt(g);
@@ -383,14 +402,16 @@ function hideDiagnosticOverlays(scorePane: HTMLElement): void {
       }
     }
 
-    // 2. 隱藏 HTML 層可能出現的紅色診斷框或徽章
+    // 3. 隱藏 HTML 層虛線粉紅/深紅診斷框或徽章（保留實線與橙色動態游標）
     for (const el of page.querySelectorAll<HTMLElement>("div, span")) {
       if (el.classList.contains("sl-ab-band") || el.classList.contains("sl-ab-marker")) continue;
+      if (isProtectedCursorEl(el)) continue;
       const st = getComputedStyle(el);
-      const dashedRed = st.borderStyle.includes("dashed") && isReddishColor(st.borderColor);
+      const dashedPink = st.borderStyle.includes("dashed") && isPinkDiagnosticColor(st.borderColor);
       const badgeText = (el.textContent || "").trim();
-      const redBadge = isReddishColor(st.color) && (/^[+\-−]/.test(badgeText) || /[♩♪♫𝅗𝅥𝅘𝅥𝅘𝅥𝅮]/.test(badgeText));
-      if (dashedRed || redBadge) {
+      const pinkBadge =
+        isPinkDiagnosticColor(st.color) && (/^[+\-−]/.test(badgeText) || /[♩♪♫𝅗𝅥𝅘𝅥𝅘𝅥𝅮]/.test(badgeText));
+      if (dashedPink || pinkBadge) {
         el.style.display = "none";
       }
     }
@@ -402,13 +423,13 @@ let _scrollGuardRaf = 0;
 
 function findPlaybackCursorRect(scorePane: HTMLElement): DOMRect | null {
   for (const page of scorePane.querySelectorAll<HTMLElement>(".score-page-wrap")) {
-    // 優先找常見游標類別
     for (const el of page.querySelectorAll<Element>("[class*='cursor' i], [class*='playhead' i]")) {
       if (el.classList.contains("sl-ab-band") || el.classList.contains("sl-ab-marker")) continue;
+      const st = getComputedStyle(el);
+      if (st.display === "none" || st.visibility === "hidden") continue;
       const r = el.getBoundingClientRect();
       if (r.width > 0 && r.height >= 12) return r;
     }
-    // 退而以橙色直條特徵辨識官方 SVG / HTML 動態游標（排除隱藏與我們自己的選段層）
     for (const rect of page.querySelectorAll<SVGRectElement>("svg rect")) {
       if (rect.classList.contains("sl-ab-band") || rect.classList.contains("sl-ab-marker")) continue;
       const st = getComputedStyle(rect);
@@ -444,13 +465,11 @@ function startPlaybackScrollGuard(scorePane: HTMLElement): void {
       const paneRect = scorePane.getBoundingClientRect();
       const contentTop = curRect.top - paneRect.top + scorePane.scrollTop;
 
-      // 偵測到跳至新的一行樂譜（或剛開始播放定位）
       if (Math.abs(contentTop - lastContentTop) > 22) {
         lastContentTop = contentTop;
         pendingEnsureFrames = 8;
       }
 
-      // 預留足夠上下邊界，涵蓋高/低音譜表上方符梁、力度記號與下方符桿加線
       const padTop = 34;
       const minSystemSpan = Math.max(curRect.height + 48, 130);
       const visibleTopNeed = curRect.top - padTop;
@@ -465,10 +484,8 @@ function startPlaybackScrollGuard(scorePane: HTMLElement): void {
         let desiredScrollTop: number;
 
         if (systemTotalH <= paneRect.height - 16) {
-          // 整行譜表放得進視窗：將該行頂部對齊於視窗上方約 24px 處，讓整行音符與譜線完整呈現
           desiredScrollTop = scorePane.scrollTop + (visibleTopNeed - paneRect.top) - 16;
         } else {
-          // 極矮螢幕（橫向手機）：置中對齊游標所在譜表
           const centerY = (curRect.top + curRect.bottom) * 0.5;
           desiredScrollTop = scorePane.scrollTop + (centerY - (paneRect.top + paneRect.height * 0.5));
         }
@@ -667,7 +684,6 @@ function paintAbBands() {
       matchedNotes.push(...boxById.values());
     }
 
-    // 僅長按住起點、尚未拖曳出範圍時：標出起點 A 括號
     if (pendingBox && !activeRange) {
       drawEndpointMarker(svg, pendingBox.minX - 6, pendingBox.minY - 6, pendingBox.maxY + 6, "start", "A", "#b88b4a");
       continue;
@@ -675,7 +691,6 @@ function paintAbBands() {
 
     if (!activeRange || matchedNotes.length === 0) continue;
 
-    // 依時間順序把同屬於同一行譜表的音符合併為連續單一底色色塊（絕不產生一條條雜亂格子）
     matchedNotes.sort((a, b) => a.t - b.t || a.minX - b.minX);
 
     interface SystemSpan {
@@ -729,7 +744,6 @@ function paintAbBands() {
       const right = sys.maxX + padX;
       const bottom = sys.maxY + padY;
 
-      // 連續單一半透明選段底色
       const rect = document.createElementNS(NS, "rect");
       rect.setAttribute("class", "sl-ab-band");
       rect.setAttribute("x", String(left));
@@ -742,7 +756,6 @@ function paintAbBands() {
       rect.setAttribute("pointer-events", "none");
       svg.appendChild(rect);
 
-      // 明確繪製起點 [A 與終點 B]
       if (sys.hasStart) {
         drawEndpointMarker(svg, left, top, bottom, "start", "A", markerColor);
       }
@@ -811,7 +824,7 @@ function applyAbLoopByIds(idA: ElementId, idB: ElementId): boolean {
  * 選段互動（電腦＋手機無衝突設計）：
  * - 手機/觸控螢幕：正常滑動可順暢捲動樂譜；「長按約 350ms 設定起點 → 不離手直接拖曳至終點 → 放開完成選段」。
  *   （若先點擊工具列的「選段」SVG 鍵，則直接觸控拖曳即可選段，無需長按）
- * - 電腦滑鼠：直接左鍵按住拖曳（框選／起點拖至終點）即可完成選段。
+ * - 電腦滑鼠：直接左鍵按住拖曳（起點拖至終點）即可完成選段。
  */
 function wireDirectScoreSelection(scorePane: HTMLElement) {
   const LONG_PRESS_MS = 350;
@@ -886,7 +899,6 @@ function wireDirectScoreSelection(scorePane: HTMLElement) {
       }
     }
 
-    // 退而以拖曳矩形範圍內最早與最晚音符作為選段
     const info = getTimeline();
     if (info) {
       const rLeft = Math.min(st.x, e.clientX);
@@ -972,10 +984,8 @@ function wireDirectScoreSelection(scorePane: HTMLElement) {
     touchEndId = null;
 
     if (_rangePickMode) {
-      // 若使用者主動點擊純 SVG「選段」鍵進入選段模式，觸碰即可直接設定起點並拖曳
       activateTouchDrag(t.clientX, t.clientY, e.target as Element | null);
     } else {
-      // 一般模式下：長按 350ms 啟動選段，若 350ms 內移動則取消讓原生捲動順利執行
       clearTouchTimer();
       const target = e.target as Element | null;
       const sx = t.clientX;
@@ -1009,7 +1019,6 @@ function wireDirectScoreSelection(scorePane: HTMLElement) {
       return;
     }
 
-    // 已長按鎖定起點：阻止瀏覽器接管為頁面捲動，即時更新拖曳終點與半透明選段底色
     e.preventDefault();
     const elUnder = document.elementFromPoint(t.clientX, t.clientY);
     const id = findNearestNoteId(scorePane, elUnder, t.clientX, t.clientY, 44);
@@ -1153,7 +1162,6 @@ async function initEngine(opts: MountShellOptions): Promise<App> {
     wireDirectScoreSelection(opts.scorePane);
     notifyRange();
 
-    // 監聽譜面 DOM 變動：即時隱藏紅色診斷色塊，並在播放啟動時掛上換行防截斷守護
     let diagScheduled = false;
     const paneObserver = new MutationObserver(() => {
       if (!diagScheduled) {
