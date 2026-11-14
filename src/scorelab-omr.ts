@@ -23,6 +23,42 @@ export interface ScoreSnapshot {
   viewMode: ViewMode;
 }
 
+const S2T_MAP: Record<string, string> = {
+  "编": "編", "辑": "輯", "节": "節", "拍": "拍", "数": "數", "处": "處",
+  "问": "問", "题": "題", "音": "音", "符": "符", "时": "時", "值": "值",
+  "附": "附", "点": "點", "声": "聲", "部": "部", "长": "長", "短": "短",
+  "复": "複", "错": "錯", "误": "誤", "调": "調", "号": "號", "线": "線",
+  "连": "連", "延": "延", "换": "換", "页": "頁", "删": "刪", "除": "除",
+  "选": "選", "中": "中", "个": "個", "无": "無", "请": "請", "先": "先",
+  "击": "擊", "仅": "僅", "支": "支", "持": "持", "图": "圖", "谱": "譜",
+  "乐": "樂", "曲": "曲", "词": "詞", "强": "強", "弱": "弱", "渐": "漸",
+  "标": "標", "记": "記", "只": "只", "能": "能", "在": "在", "这": "這",
+  "里": "裡", "对": "對", "齐": "齊", "满": "滿", "于": "於", "为": "為",
+  "与": "與", "没": "沒", "经": "經", "结": "結", "开": "開", "设": "設",
+  "改": "改", "变": "變", "动": "動", "撤": "撤", "销": "銷", "实": "實",
+  "际": "際", "应": "應", "该": "該", "还": "還", "组": "組", "圆": "圓",
+  "滑": "滑", "休": "休", "止": "止", "空": "空", "当": "當", "前": "前",
+  "后": "後", "两": "兩", "边": "邊", "间": "間", "格": "格", "贴": "貼",
+  "复": "複", "制": "製", "移": "移", "高": "高", "低": "低", "升": "升",
+  "降": "降", "半": "半", "全": "全", "单": "單", "双": "雙", "多": "多",
+  "少": "少", "过": "過", "补": "補", "漏": "漏", "识": "識", "别": "別",
+  "核": "核", "写": "寫", "读": "讀", "入": "入", "导": "導", "出": "出",
+  "保": "保", "存": "存", "确": "確", "认": "認", "取": "取", "消": "消",
+  "简": "簡", "繁": "繁", "体": "體", "五": "五", "混": "混", "排": "排",
+  "版": "版", "面": "面", "显": "顯", "示": "示", "隐": "隱", "藏": "藏",
+  "条": "條", "行": "行", "段": "段", "整": "整", "首": "首", "尾": "尾",
+};
+
+function toTraditionalUi(s: string): string {
+  if (!s) return s;
+  let out = "";
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i]!;
+    out += S2T_MAP[ch] ?? ch;
+  }
+  return out;
+}
+
 async function registerBravura() {
   if (typeof FontFace === "undefined") return;
   const faces = [
@@ -262,6 +298,8 @@ export interface MountShellOptions {
   viewSwitch?: HTMLElement | null;
   viewBtns?: ReadonlyMap<ViewMode, HTMLButtonElement>;
   editToggleBtn?: HTMLButtonElement | null;
+  editSaveBtn?: HTMLButtonElement | null;
+  editDiscardBtn?: HTMLButtonElement | null;
   editPanel?: HTMLElement | null;
   visualEls?: {
     mode: HTMLElement | null;
@@ -269,12 +307,10 @@ export interface MountShellOptions {
     marksBtn: HTMLButtonElement | null;
     beatBtn: HTMLButtonElement | null;
     beatCount: HTMLElement | null;
-    palette: HTMLElement | null;
-    paletteBtn: HTMLButtonElement | null;
   };
   onZoomChange?: (zoom: number) => void;
   onRangeChange?: (state: { active: boolean; picking: boolean; hasStart: boolean }) => void;
-  onEditModeChange?: (editing: boolean) => void;
+  onEditModeChange?: (editing: boolean, committed?: boolean) => void;
 }
 
 let _appPromise: Promise<App> | null = null;
@@ -288,6 +324,7 @@ let _onRangeChange: MountShellOptions["onRangeChange"];
 let _onEditModeChange: MountShellOptions["onEditModeChange"];
 let _loadGen = 0;
 let _editMode = false;
+let _editBackup: { format: DocFormatId; text: string; viewMode: ViewMode } | null = null;
 
 // ---- 譜面直接選段 A-B 反覆循環 ----
 let _abLoop: { first: PlayPoint; last: PlayPoint; tFrom: number; tTo: number } | null = null;
@@ -303,35 +340,112 @@ function notifyRange() {
   });
 }
 
-function applyEditMode(on: boolean) {
-  _editMode = on;
+function captureSnapshot(): { format: DocFormatId; text: string; viewMode: ViewMode } | null {
+  if (!_app || _app.pageEls.length === 0) return null;
+  return {
+    format: _app.docFormat,
+    text: _app.getText(),
+    viewMode: _app.viewMode,
+  };
+}
+
+async function restoreSnapshotInternal(snap: { format: DocFormatId; text: string; viewMode: ViewMode }) {
+  if (!_app) return;
+  cleanupSustainCursor(_scorePane);
+  _app.stopPlayback();
+  _app.clearPages();
+  if (snap.format === "musicxml") {
+    _app.adoptStaffXml(snap.text);
+  } else {
+    _app.adoptText(snap.format, snap.text, null);
+  }
+  const targetMode = snap.viewMode === "original" ? "expanded" : snap.viewMode;
+  await _app.setViewMode(targetMode);
+  await _app.whenIdle();
+}
+
+function enterEditMode() {
+  if (_editMode) return;
+  _editBackup = captureSnapshot();
+  _editMode = true;
   if (_editToggleBtn) {
-    _editToggleBtn.classList.toggle("active", on);
-    _editToggleBtn.setAttribute("aria-pressed", String(on));
+    _editToggleBtn.classList.add("active");
+    _editToggleBtn.setAttribute("aria-pressed", "true");
   }
   if (_editPanel) {
-    _editPanel.classList.toggle("hidden", !on);
+    _editPanel.classList.remove("hidden");
+  }
+  if (_rangePickMode) {
+    _rangePickMode = false;
+    _abPendingStart = null;
+    _abPreviewRange = null;
+    paintAbBands();
+    notifyRange();
   }
   if (_app) {
-    if (on) {
-      if (_rangePickMode) {
-        _rangePickMode = false;
-        _abPendingStart = null;
-        _abPreviewRange = null;
-        paintAbBands();
-        notifyRange();
-      }
-      _app.visual.showPalette = true;
-      _app.visual.beatCheck = true;
-      _app.visual.afterRebuild();
-      _scorePane?.focus({ preventScroll: true });
-    } else {
-      _app.visual.showPalette = false;
-      _app.visual.afterRebuild();
-      if (_scorePane) hideDiagnosticOverlays(_scorePane);
-    }
+    _app.visual.beatCheck = true;
+    _app.visual.afterRebuild();
+    _scorePane?.focus({ preventScroll: true });
   }
-  _onEditModeChange?.(on);
+  _onEditModeChange?.(true, false);
+}
+
+function commitEditMode() {
+  if (!_editMode) return;
+  _editBackup = null;
+  _editMode = false;
+  if (_editToggleBtn) {
+    _editToggleBtn.classList.remove("active");
+    _editToggleBtn.setAttribute("aria-pressed", "false");
+  }
+  if (_editPanel) {
+    _editPanel.classList.add("hidden");
+  }
+  if (_app) {
+    _app.visual.afterRebuild();
+    if (_scorePane) hideDiagnosticOverlays(_scorePane);
+  }
+  _onEditModeChange?.(false, true);
+}
+
+async function cancelEditMode() {
+  if (!_editMode) return;
+  const backup = _editBackup;
+  _editBackup = null;
+  _editMode = false;
+  if (_editToggleBtn) {
+    _editToggleBtn.classList.remove("active");
+    _editToggleBtn.setAttribute("aria-pressed", "false");
+  }
+  if (_editPanel) {
+    _editPanel.classList.add("hidden");
+  }
+  if (_app && backup && (_app.getText() !== backup.text || _app.docFormat !== backup.format || _app.viewMode !== backup.viewMode)) {
+    await restoreSnapshotInternal(backup);
+  }
+  if (_app) {
+    _app.visual.afterRebuild();
+    if (_scorePane) hideDiagnosticOverlays(_scorePane);
+  }
+  _onEditModeChange?.(false, false);
+}
+
+function observeTraditionalText(el: HTMLElement | null | undefined) {
+  if (!el) return;
+  let busy = false;
+  const convert = () => {
+    if (busy) return;
+    const raw = el.textContent ?? "";
+    const trad = toTraditionalUi(raw);
+    if (trad !== raw) {
+      busy = true;
+      el.textContent = trad;
+      busy = false;
+    }
+  };
+  convert();
+  const obs = new MutationObserver(convert);
+  obs.observe(el, { childList: true, characterData: true, subtree: true });
 }
 
 function resolveNoteIdAt(el: Element | null): ElementId | null {
@@ -2011,10 +2125,19 @@ async function initEngine(opts: MountShellOptions): Promise<App> {
     app.statusEl = opts.statusEl ?? null;
     app.loadSettings();
 
-    // 掛載原版可視化修譜控制器（預設關閉修譜模式，待使用者點擊「修譜」才啟用）
+    // 掛載原版可視化修譜核心（停用其簡體內建按鈕牆，改由我們繁體分區面板呼叫 runVisualAction）
     if (opts.visualEls) {
-      app.visual.attach(opts.visualEls);
+      app.visual.attach({
+        ...opts.visualEls,
+        palette: null,
+        paletteBtn: null,
+      });
+      observeTraditionalText(opts.visualEls.mode);
+      observeTraditionalText(opts.visualEls.selInfo);
+      observeTraditionalText(opts.visualEls.beatCount);
     }
+    observeTraditionalText(opts.statusEl);
+
     const origVisualEnabled = app.visualEnabled.bind(app);
     app.visualEnabled = () => _editMode && origVisualEnabled();
     app.visual.showPalette = false;
@@ -2065,11 +2188,15 @@ async function initEngine(opts: MountShellOptions): Promise<App> {
       if (opts.viewSwitch) app.setViewModeButtons(opts.viewSwitch, opts.viewBtns);
     }
 
-    if (opts.editToggleBtn) {
-      opts.editToggleBtn.addEventListener("click", () => {
-        applyEditMode(!_editMode);
-      });
-    }
+    opts.editToggleBtn?.addEventListener("click", () => {
+      if (_editMode) {
+        void cancelEditMode();
+      } else {
+        enterEditMode();
+      }
+    });
+    opts.editSaveBtn?.addEventListener("click", () => commitEditMode());
+    opts.editDiscardBtn?.addEventListener("click", () => void cancelEditMode());
 
     attachPinchZoom(opts.scorePane, {
       get: () => app.zoom,
@@ -2134,6 +2261,7 @@ async function recognizeAndRender(
   if (!files.length) throw new Error("未選擇任何檔案");
 
   const myGen = ++_loadGen;
+  if (_editMode) await cancelEditMode();
   cleanupSustainCursor(_scorePane);
   clearAbLoop(true);
   _app.stopPlayback();
@@ -2319,7 +2447,10 @@ declare global {
       getSnapshot: () => ScoreSnapshot | null;
       loadSnapshot: (snap: Pick<ScoreSnapshot, "format" | "text" | "viewMode">) => Promise<void>;
       setEditMode: (on: boolean) => void;
+      commitEditMode: () => void;
+      cancelEditMode: () => Promise<void>;
       isEditMode: () => boolean;
+      runVisualAction: (id: string, key?: string) => boolean;
       toggleRangePick: () => void;
       clearRangeLoop: () => void;
       setViewMode: (m: ViewMode) => Promise<void>;
@@ -2341,6 +2472,7 @@ window.__dolceEngine = {
   async loadXmlText(xml, viewMode = "staff") {
     if (!_app) return;
     _loadGen++;
+    if (_editMode) await cancelEditMode();
     cleanupSustainCursor(_scorePane);
     clearAbLoop(true);
     _app.stopPlayback();
@@ -2370,6 +2502,7 @@ window.__dolceEngine = {
   async loadSnapshot(snap) {
     if (!_app) return;
     _loadGen++;
+    if (_editMode) await cancelEditMode();
     cleanupSustainCursor(_scorePane);
     clearAbLoop(true);
     _app.stopPlayback();
@@ -2391,13 +2524,27 @@ window.__dolceEngine = {
     _app.visual.afterRebuild();
   },
   setEditMode(on) {
-    applyEditMode(on);
+    if (on) enterEditMode();
+    else void cancelEditMode();
+  },
+  commitEditMode() {
+    commitEditMode();
+  },
+  async cancelEditMode() {
+    await cancelEditMode();
   },
   isEditMode() {
     return _editMode;
   },
+  runVisualAction(id, key = "") {
+    if (!_app || !_editMode) return false;
+    if (!_app.syncFresh()) _app.reloadNow();
+    const ok = _app.visual.runById(id, key);
+    _scorePane?.focus({ preventScroll: true });
+    return ok;
+  },
   toggleRangePick() {
-    if (_editMode) applyEditMode(false);
+    if (_editMode) void cancelEditMode();
     _rangePickMode = !_rangePickMode;
     if (!_rangePickMode) {
       _abPendingStart = null;
