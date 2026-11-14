@@ -336,6 +336,7 @@ function isOrangeCursorColor(colorStr: string | null | undefined): boolean {
 }
 
 function isProtectedCursorEl(el: Element): boolean {
+  if (el.classList.contains("sl-sustain-cursor")) return true;
   if (el.closest("[class*='cursor' i], [class*='playhead' i], [class*='caret' i]")) {
     return true;
   }
@@ -355,9 +356,14 @@ function hideDiagnosticOverlays(scorePane: HTMLElement): void {
   const pages = scorePane.querySelectorAll<HTMLElement>(".score-page-wrap");
   for (const page of pages) {
     for (const svg of page.querySelectorAll<SVGSVGElement>("svg")) {
-      // 1. 僅隱藏「虛線 + 粉紅/深紅」的拍數警告方框，實線方框與橙色游標完全不動
       for (const rect of svg.querySelectorAll<SVGRectElement>("rect")) {
-        if (rect.classList.contains("sl-ab-band") || rect.classList.contains("sl-ab-marker")) continue;
+        if (
+          rect.classList.contains("sl-ab-band") ||
+          rect.classList.contains("sl-ab-marker") ||
+          rect.classList.contains("sl-sustain-cursor")
+        ) {
+          continue;
+        }
         if (isProtectedCursorEl(rect)) continue;
         const st = getComputedStyle(rect);
         const dash = rect.getAttribute("stroke-dasharray") || st.strokeDasharray;
@@ -370,7 +376,6 @@ function hideDiagnosticOverlays(scorePane: HTMLElement): void {
         }
       }
 
-      // 2. 僅隱藏粉紅/深紅的 +♩ / -♩ 診斷徽章文字與小音符圖示
       for (const txt of svg.querySelectorAll<SVGTextElement>("text")) {
         if (isProtectedCursorEl(txt)) continue;
         const st = getComputedStyle(txt);
@@ -402,9 +407,14 @@ function hideDiagnosticOverlays(scorePane: HTMLElement): void {
       }
     }
 
-    // 3. 隱藏 HTML 層虛線粉紅/深紅診斷框或徽章（保留實線與橙色動態游標）
     for (const el of page.querySelectorAll<HTMLElement>("div, span")) {
-      if (el.classList.contains("sl-ab-band") || el.classList.contains("sl-ab-marker")) continue;
+      if (
+        el.classList.contains("sl-ab-band") ||
+        el.classList.contains("sl-ab-marker") ||
+        el.classList.contains("sl-sustain-cursor")
+      ) {
+        continue;
+      }
       if (isProtectedCursorEl(el)) continue;
       const st = getComputedStyle(el);
       const dashedPink = st.borderStyle.includes("dashed") && isPinkDiagnosticColor(st.borderColor);
@@ -418,98 +428,7 @@ function hideDiagnosticOverlays(scorePane: HTMLElement): void {
   }
 }
 
-// ---- 播放自動換行防截斷守護 ----
-let _scrollGuardRaf = 0;
-
-function findPlaybackCursorRect(scorePane: HTMLElement): DOMRect | null {
-  for (const page of scorePane.querySelectorAll<HTMLElement>(".score-page-wrap")) {
-    for (const el of page.querySelectorAll<Element>("[class*='cursor' i], [class*='playhead' i]")) {
-      if (el.classList.contains("sl-ab-band") || el.classList.contains("sl-ab-marker")) continue;
-      const st = getComputedStyle(el);
-      if (st.display === "none" || st.visibility === "hidden") continue;
-      const r = el.getBoundingClientRect();
-      if (r.width > 0 && r.height >= 12) return r;
-    }
-    for (const rect of page.querySelectorAll<SVGRectElement>("svg rect")) {
-      if (rect.classList.contains("sl-ab-band") || rect.classList.contains("sl-ab-marker")) continue;
-      const st = getComputedStyle(rect);
-      if (st.display === "none" || st.visibility === "hidden") continue;
-      if (!isOrangeCursorColor(st.stroke) && !isOrangeCursorColor(st.fill)) continue;
-      const r = rect.getBoundingClientRect();
-      if (r.width > 1 && r.width <= 60 && r.height >= 16) return r;
-    }
-    for (const div of page.querySelectorAll<HTMLElement>("div")) {
-      const st = getComputedStyle(div);
-      if (st.display === "none" || st.visibility === "hidden") continue;
-      if (!isOrangeCursorColor(st.borderColor) && !isOrangeCursorColor(st.backgroundColor)) continue;
-      const r = div.getBoundingClientRect();
-      if (r.width > 1 && r.width <= 60 && r.height >= 16) return r;
-    }
-  }
-  return null;
-}
-
-function startPlaybackScrollGuard(scorePane: HTMLElement): void {
-  if (_scrollGuardRaf) return;
-  let lastContentTop = -Infinity;
-  let pendingEnsureFrames = 0;
-
-  const step = () => {
-    if (!_app || !_app.playback.busy) {
-      _scrollGuardRaf = 0;
-      return;
-    }
-
-    const curRect = findPlaybackCursorRect(scorePane);
-    if (curRect) {
-      const paneRect = scorePane.getBoundingClientRect();
-      const contentTop = curRect.top - paneRect.top + scorePane.scrollTop;
-
-      if (Math.abs(contentTop - lastContentTop) > 22) {
-        lastContentTop = contentTop;
-        pendingEnsureFrames = 8;
-      }
-
-      const padTop = 34;
-      const minSystemSpan = Math.max(curRect.height + 48, 130);
-      const visibleTopNeed = curRect.top - padTop;
-      const visibleBottomNeed = Math.max(curRect.bottom + 42, curRect.top + minSystemSpan);
-
-      const isClippedTop = visibleTopNeed < paneRect.top + 4;
-      const isClippedBottom = visibleBottomNeed > paneRect.bottom - 6;
-
-      if ((pendingEnsureFrames > 0 || isClippedBottom) && (isClippedTop || isClippedBottom)) {
-        const systemTotalH = visibleBottomNeed - visibleTopNeed;
-        const maxScroll = Math.max(0, scorePane.scrollHeight - scorePane.clientHeight);
-        let desiredScrollTop: number;
-
-        if (systemTotalH <= paneRect.height - 16) {
-          desiredScrollTop = scorePane.scrollTop + (visibleTopNeed - paneRect.top) - 16;
-        } else {
-          const centerY = (curRect.top + curRect.bottom) * 0.5;
-          desiredScrollTop = scorePane.scrollTop + (centerY - (paneRect.top + paneRect.height * 0.5));
-        }
-
-        desiredScrollTop = Math.max(0, Math.min(maxScroll, desiredScrollTop));
-        if (Math.abs(desiredScrollTop - scorePane.scrollTop) > 3) {
-          scorePane.scrollTop = desiredScrollTop;
-        }
-      }
-
-      if (pendingEnsureFrames > 0) pendingEnsureFrames--;
-    }
-
-    _scrollGuardRaf = requestAnimationFrame(step);
-  };
-
-  _scrollGuardRaf = requestAnimationFrame(step);
-}
-
-// ---- 選段繪製：單一連續半透明底色 + 清晰起點(A)/終點(B)標記 ----
-function clearAbBands() {
-  _scorePane?.querySelectorAll(".sl-ab-band, .sl-ab-marker").forEach((el) => el.remove());
-}
-
+// ---- 座標轉換工具 ----
 function unionBoxInSvgRoot(
   el: SVGGraphicsElement,
   invSvgCtm: DOMMatrix,
@@ -551,6 +470,372 @@ function unionBoxInSvgRoot(
     }
   }
   return out;
+}
+
+function clientRectToSvgRoot(
+  rect: DOMRect,
+  invSvgCtm: DOMMatrix,
+): { minX: number; minY: number; maxX: number; maxY: number } {
+  const pts: [number, number][] = [
+    [invSvgCtm.a * rect.left + invSvgCtm.c * rect.top + invSvgCtm.e, invSvgCtm.b * rect.left + invSvgCtm.d * rect.top + invSvgCtm.f],
+    [invSvgCtm.a * rect.right + invSvgCtm.c * rect.top + invSvgCtm.e, invSvgCtm.b * rect.right + invSvgCtm.d * rect.top + invSvgCtm.f],
+    [invSvgCtm.a * rect.left + invSvgCtm.c * rect.bottom + invSvgCtm.e, invSvgCtm.b * rect.left + invSvgCtm.d * rect.bottom + invSvgCtm.f],
+    [invSvgCtm.a * rect.right + invSvgCtm.c * rect.bottom + invSvgCtm.e, invSvgCtm.b * rect.right + invSvgCtm.d * rect.bottom + invSvgCtm.f],
+  ];
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const [px, py] of pts) {
+    if (px < minX) minX = px;
+    if (py < minY) minY = py;
+    if (px > maxX) maxX = px;
+    if (py > maxY) maxY = py;
+  }
+  return { minX, minY, maxX, maxY };
+}
+
+// ---- 播放游標偵測 ＋ 簡譜延音橫線（-）動態游標推進 ＋ 換行防截斷守護 ----
+let _playbackGuardRaf = 0;
+let _hiddenCursorEl: HTMLElement | SVGElement | null = null;
+let _sustainState: {
+  key: string;
+  enterMs: number;
+  durSec: number;
+  lastCursorLeft: number;
+} | null = null;
+
+function findOfficialPlaybackCursor(scorePane: HTMLElement): { el: HTMLElement | SVGElement; rect: DOMRect } | null {
+  for (const page of scorePane.querySelectorAll<HTMLElement>(".score-page-wrap")) {
+    for (const el of page.querySelectorAll<HTMLElement | SVGElement>("[class*='cursor' i], [class*='playhead' i]")) {
+      if (
+        el.classList.contains("sl-ab-band") ||
+        el.classList.contains("sl-ab-marker") ||
+        el.classList.contains("sl-sustain-cursor")
+      ) {
+        continue;
+      }
+      const st = getComputedStyle(el);
+      if (st.display === "none" || st.visibility === "hidden") continue;
+      const r = el.getBoundingClientRect();
+      if (r.width > 0 && r.height >= 12) return { el, rect: r };
+    }
+    for (const rect of page.querySelectorAll<SVGRectElement>("svg rect")) {
+      if (
+        rect.classList.contains("sl-ab-band") ||
+        rect.classList.contains("sl-ab-marker") ||
+        rect.classList.contains("sl-sustain-cursor")
+      ) {
+        continue;
+      }
+      const st = getComputedStyle(rect);
+      if (st.display === "none" || st.visibility === "hidden") continue;
+      if (!isOrangeCursorColor(st.stroke) && !isOrangeCursorColor(st.fill)) continue;
+      const r = rect.getBoundingClientRect();
+      if (r.width > 1 && r.width <= 60 && r.height >= 16) return { el: rect, rect: r };
+    }
+    for (const div of page.querySelectorAll<HTMLElement>("div")) {
+      const st = getComputedStyle(div);
+      if (st.display === "none" || st.visibility === "hidden") continue;
+      if (!isOrangeCursorColor(st.borderColor) && !isOrangeCursorColor(st.backgroundColor)) continue;
+      const r = div.getBoundingClientRect();
+      if (r.width > 1 && r.width <= 60 && r.height >= 16) return { el: div, rect: r };
+    }
+  }
+  return null;
+}
+
+function cleanupSustainCursor(scorePane?: HTMLElement | null) {
+  if (_hiddenCursorEl) {
+    _hiddenCursorEl.style.opacity = "";
+    _hiddenCursorEl = null;
+  }
+  scorePane?.querySelectorAll(".sl-sustain-cursor").forEach((el) => el.remove());
+  _sustainState = null;
+}
+
+function findSustainBoxesForNote(
+  svg: SVGSVGElement,
+  invSvgCtm: DOMMatrix,
+  noteId: ElementId,
+  noteBox: { minX: number; minY: number; maxX: number; maxY: number },
+): { minX: number; minY: number; maxX: number; maxY: number }[] {
+  if (!_app) return [];
+
+  const noteMidY = (noteBox.minY + noteBox.maxY) * 0.5;
+  const noteH = Math.max(16, noteBox.maxY - noteBox.minY);
+  const rowTol = Math.max(24, noteH * 0.95);
+
+  const sameIdSustains: { minX: number; minY: number; maxX: number; maxY: number }[] = [];
+  const nearbySustains: { minX: number; minY: number; maxX: number; maxY: number }[] = [];
+  let nextNoteMinX = Infinity;
+
+  for (const g of svg.querySelectorAll<SVGGElement>("g")) {
+    const entry = _app.syncView.entryAt(g);
+    if (!entry) continue;
+    const b = unionBoxInSvgRoot(g, invSvgCtm, null);
+    if (!b) continue;
+    const midY = (b.minY + b.maxY) * 0.5;
+    if (Math.abs(midY - noteMidY) > rowTol) continue;
+
+    if ((entry.kind === "note" || entry.kind === "rest") && entry.id !== noteId) {
+      if (b.minX > noteBox.maxX - 2 && b.minX < nextNoteMinX) {
+        nextNoteMinX = b.minX;
+      }
+      continue;
+    }
+
+    if (entry.kind === "sustain") {
+      if (entry.id === noteId) {
+        sameIdSustains.push(b);
+      } else if (b.minX > noteBox.maxX - 4) {
+        nearbySustains.push(b);
+      }
+    }
+  }
+
+  let chosen =
+    sameIdSustains.length > 0
+      ? sameIdSustains
+      : nearbySustains.filter((b) => b.maxX <= nextNoteMinX + 4);
+
+  // 若 syncView 未將橫線標為 sustain，退而偵測同行中位於主音符與下一音符之間的 "-" 橫線
+  if (chosen.length === 0) {
+    const dashTexts: { minX: number; minY: number; maxX: number; maxY: number }[] = [];
+    for (const txt of svg.querySelectorAll<SVGTextElement>("text")) {
+      const content = (txt.textContent || "").trim();
+      if (content !== "-" && content !== "–" && content !== "—" && content !== "−") continue;
+      const b = unionBoxInSvgRoot(txt, invSvgCtm, null);
+      if (!b) continue;
+      const midY = (b.minY + b.maxY) * 0.5;
+      if (Math.abs(midY - noteMidY) <= rowTol && b.minX > noteBox.maxX - 2 && b.maxX <= nextNoteMinX + 4) {
+        dashTexts.push(b);
+      }
+    }
+    chosen = dashTexts;
+  }
+
+  chosen.sort((a, b) => a.minX - b.minX);
+  return chosen;
+}
+
+function updateSustainCursor(
+  scorePane: HTMLElement,
+  cursor: { el: HTMLElement | SVGElement; rect: DOMRect },
+): DOMRect | null {
+  if (!_app || _app.mode === "mixed") {
+    cleanupSustainCursor(scorePane);
+    return null;
+  }
+
+  const page = cursor.el.closest<HTMLElement>(".score-page-wrap");
+  const svg =
+    cursor.el instanceof SVGElement
+      ? cursor.el.ownerSVGElement
+      : page?.querySelector<SVGSVGElement>("svg") ?? null;
+  if (!svg) {
+    cleanupSustainCursor(scorePane);
+    return null;
+  }
+
+  const svgCtm = svg.getScreenCTM();
+  if (!svgCtm) return null;
+  const invSvgCtm = svgCtm.inverse();
+
+  // 找出游標當下所在的簡譜主音符（note）
+  let matchedId: ElementId | null = null;
+  let matchedBox: { minX: number; minY: number; maxX: number; maxY: number } | null = null;
+  let bestScore = Infinity;
+  const curCenterX = (cursor.rect.left + cursor.rect.right) * 0.5;
+
+  for (const g of svg.querySelectorAll<SVGGElement>("g")) {
+    const entry = _app.syncView.entryAt(g);
+    if (!entry || entry.kind !== "note") continue;
+    const gr = g.getBoundingClientRect();
+    if (gr.width <= 0 && gr.height <= 0) continue;
+    if (
+      gr.right < cursor.rect.left - 6 ||
+      gr.left > cursor.rect.right + 6 ||
+      gr.bottom < cursor.rect.top - 6 ||
+      gr.top > cursor.rect.bottom + 6
+    ) {
+      continue;
+    }
+    const dist = Math.abs((gr.left + gr.right) * 0.5 - curCenterX);
+    if (dist < bestScore) {
+      const box = unionBoxInSvgRoot(g, invSvgCtm, null);
+      if (box) {
+        bestScore = dist;
+        matchedId = entry.id;
+        matchedBox = box;
+      }
+    }
+  }
+
+  if (matchedId === null || !matchedBox) {
+    cleanupSustainCursor(scorePane);
+    return null;
+  }
+
+  const sustainBoxes = findSustainBoxesForNote(svg, invSvgCtm, matchedId, matchedBox);
+  if (sustainBoxes.length === 0) {
+    cleanupSustainCursor(scorePane);
+    return null;
+  }
+
+  const info = getTimeline();
+  if (!info) {
+    cleanupSustainCursor(scorePane);
+    return null;
+  }
+  const span = spanSeconds(info.tl, info.spq, { id: matchedId, pass: 1 }, { id: matchedId, pass: 1 });
+  if (!span || span.to <= span.from) {
+    cleanupSustainCursor(scorePane);
+    return null;
+  }
+
+  const durSec = Math.max(0.08, span.to - span.from);
+  const pageIdx = Array.from(scorePane.querySelectorAll(".score-page-wrap")).indexOf(page ?? svg);
+  const noteKey = `${pageIdx}:${matchedId}`;
+  const nowMs = performance.now();
+
+  if (
+    !_sustainState ||
+    _sustainState.key !== noteKey ||
+    Math.abs(cursor.rect.left - _sustainState.lastCursorLeft) > 8 ||
+    (nowMs - _sustainState.enterMs) / 1000 > durSec + 0.12
+  ) {
+    _sustainState = {
+      key: noteKey,
+      enterMs: nowMs,
+      durSec,
+      lastCursorLeft: cursor.rect.left,
+    };
+  } else {
+    _sustainState.durSec = durSec;
+  }
+
+  const elapsedSec = (nowMs - _sustainState.enterMs) / 1000;
+  const totalSteps = sustainBoxes.length + 1;
+  const step = Math.min(sustainBoxes.length, Math.max(0, Math.floor((elapsedSec / durSec) * totalSteps)));
+
+  if (step === 0) {
+    if (_hiddenCursorEl) {
+      _hiddenCursorEl.style.opacity = "";
+      _hiddenCursorEl = null;
+    }
+    svg.querySelectorAll(".sl-sustain-cursor").forEach((el) => el.remove());
+    return null;
+  }
+
+  const targetDash = sustainBoxes[step - 1]!;
+  const origBox =
+    cursor.el instanceof SVGGraphicsElement
+      ? unionBoxInSvgRoot(cursor.el, invSvgCtm, null) ?? clientRectToSvgRoot(cursor.rect, invSvgCtm)
+      : clientRectToSvgRoot(cursor.rect, invSvgCtm);
+
+  if (_hiddenCursorEl && _hiddenCursorEl !== cursor.el) {
+    _hiddenCursorEl.style.opacity = "";
+  }
+  _hiddenCursorEl = cursor.el;
+  cursor.el.style.opacity = "0";
+
+  // 清除其他頁殘留游標，只保留當下頁面上的 .sl-sustain-cursor
+  for (const stale of scorePane.querySelectorAll(".sl-sustain-cursor")) {
+    if (stale.parentNode !== svg) stale.remove();
+  }
+
+  let ghost = svg.querySelector<SVGRectElement>(".sl-sustain-cursor");
+  if (!ghost) {
+    ghost = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    ghost.setAttribute("class", "sl-sustain-cursor");
+    ghost.setAttribute("pointer-events", "none");
+    svg.appendChild(ghost);
+  }
+
+  const st = getComputedStyle(cursor.el);
+  const fillVal =
+    isOrangeCursorColor(st.fill) ? st.fill : isOrangeCursorColor(st.backgroundColor) ? st.backgroundColor : "rgba(234, 88, 12, 0.22)";
+  const strokeVal =
+    isOrangeCursorColor(st.stroke) ? st.stroke : isOrangeCursorColor(st.borderColor) ? st.borderColor : "#ea580c";
+
+  const origW = Math.max(10, origBox.maxX - origBox.minX);
+  const dashW = Math.max(origW * 0.9, targetDash.maxX - targetDash.minX + 12);
+  const cx = (targetDash.minX + targetDash.maxX) * 0.5;
+
+  ghost.setAttribute("x", String(cx - dashW * 0.5));
+  ghost.setAttribute("y", String(origBox.minY));
+  ghost.setAttribute("width", String(dashW));
+  ghost.setAttribute("height", String(Math.max(12, origBox.maxY - origBox.minY)));
+  ghost.setAttribute("rx", cursor.el.getAttribute("rx") || "4");
+  ghost.setAttribute("ry", cursor.el.getAttribute("ry") || "4");
+  ghost.setAttribute("fill", fillVal);
+  ghost.setAttribute("stroke", strokeVal);
+  ghost.setAttribute("stroke-width", cursor.el.getAttribute("stroke-width") || "1.5");
+
+  return ghost.getBoundingClientRect();
+}
+
+function startPlaybackScrollGuard(scorePane: HTMLElement): void {
+  if (_playbackGuardRaf) return;
+  let lastContentTop = -Infinity;
+  let pendingEnsureFrames = 0;
+
+  const step = () => {
+    if (!_app || !_app.playback.busy) {
+      cleanupSustainCursor(scorePane);
+      _playbackGuardRaf = 0;
+      return;
+    }
+
+    const cursor = findOfficialPlaybackCursor(scorePane);
+    if (cursor) {
+      const activeRect = updateSustainCursor(scorePane, cursor) ?? cursor.rect;
+      const paneRect = scorePane.getBoundingClientRect();
+      const contentTop = activeRect.top - paneRect.top + scorePane.scrollTop;
+
+      if (Math.abs(contentTop - lastContentTop) > 22) {
+        lastContentTop = contentTop;
+        pendingEnsureFrames = 8;
+      }
+
+      const padTop = 34;
+      const minSystemSpan = Math.max(activeRect.height + 48, 130);
+      const visibleTopNeed = activeRect.top - padTop;
+      const visibleBottomNeed = Math.max(activeRect.bottom + 42, activeRect.top + minSystemSpan);
+
+      const isClippedTop = visibleTopNeed < paneRect.top + 4;
+      const isClippedBottom = visibleBottomNeed > paneRect.bottom - 6;
+
+      if ((pendingEnsureFrames > 0 || isClippedBottom) && (isClippedTop || isClippedBottom)) {
+        const systemTotalH = visibleBottomNeed - visibleTopNeed;
+        const maxScroll = Math.max(0, scorePane.scrollHeight - scorePane.clientHeight);
+        let desiredScrollTop: number;
+
+        if (systemTotalH <= paneRect.height - 16) {
+          desiredScrollTop = scorePane.scrollTop + (visibleTopNeed - paneRect.top) - 16;
+        } else {
+          const centerY = (activeRect.top + activeRect.bottom) * 0.5;
+          desiredScrollTop = scorePane.scrollTop + (centerY - (paneRect.top + paneRect.height * 0.5));
+        }
+
+        desiredScrollTop = Math.max(0, Math.min(maxScroll, desiredScrollTop));
+        if (Math.abs(desiredScrollTop - scorePane.scrollTop) > 3) {
+          scorePane.scrollTop = desiredScrollTop;
+        }
+      }
+
+      if (pendingEnsureFrames > 0) pendingEnsureFrames--;
+    } else {
+      cleanupSustainCursor(scorePane);
+    }
+
+    _playbackGuardRaf = requestAnimationFrame(step);
+  };
+
+  _playbackGuardRaf = requestAnimationFrame(step);
+}
+
+// ---- 選段繪製：單一連續半透明底色 + 清晰起點(A)/終點(B)標記 ----
+function clearAbBands() {
+  _scorePane?.querySelectorAll(".sl-ab-band, .sl-ab-marker").forEach((el) => el.remove());
 }
 
 interface NoteRootBox {
@@ -665,10 +950,10 @@ function paintAbBands() {
       const boxById = new Map<ElementId, NoteRootBox>();
       for (const g of svg.querySelectorAll<SVGGElement>("g")) {
         const entry = _app.syncView.entryAt(g);
-        if (!entry || entry.kind !== "note") continue;
+        if (!entry || (entry.kind !== "note" && entry.kind !== "sustain")) continue;
         const id = entry.id;
 
-        if (_abPendingStart !== null && id === _abPendingStart) {
+        if (_abPendingStart !== null && id === _abPendingStart && entry.kind === "note") {
           const merged = unionBoxInSvgRoot(g, invSvgCtm, pendingBox);
           if (merged) pendingBox = { id, t: 0, ...merged };
         }
@@ -1133,7 +1418,10 @@ async function initEngine(opts: MountShellOptions): Promise<App> {
         }, 30);
       });
     }
-    if (opts.stopBtn) app.playback.setStopBtn(opts.stopBtn);
+    if (opts.stopBtn) {
+      app.playback.setStopBtn(opts.stopBtn);
+      opts.stopBtn.addEventListener("click", () => cleanupSustainCursor(opts.scorePane));
+    }
     if (opts.progressEl) app.playback.bindProgress(opts.progressEl, opts.timeEl ?? null);
     if (opts.speedSel) app.playback.bindSpeedSelect(opts.speedSel);
 
@@ -1144,6 +1432,7 @@ async function initEngine(opts: MountShellOptions): Promise<App> {
     if (opts.viewBtns) {
       for (const [mode, btn] of opts.viewBtns) {
         btn.addEventListener("click", async () => {
+          cleanupSustainCursor(opts.scorePane);
           clearAbLoop(false);
           await app.setViewMode(mode);
           hideDiagnosticOverlays(opts.scorePane);
@@ -1199,6 +1488,7 @@ async function recognizeAndRender(
   if (!files.length) throw new Error("未選擇任何檔案");
 
   const myGen = ++_loadGen;
+  cleanupSustainCursor(_scorePane);
   clearAbLoop(true);
   _app.stopPlayback();
   _app.clearPages();
@@ -1393,6 +1683,7 @@ window.__dolceEngine = {
   async loadXmlText(xml, viewMode = "staff") {
     if (!_app) return;
     _loadGen++;
+    cleanupSustainCursor(_scorePane);
     clearAbLoop(true);
     _app.stopPlayback();
     _app.clearPages();
@@ -1420,6 +1711,7 @@ window.__dolceEngine = {
   async loadSnapshot(snap) {
     if (!_app) return;
     _loadGen++;
+    cleanupSustainCursor(_scorePane);
     clearAbLoop(true);
     _app.stopPlayback();
     _app.clearPages();
@@ -1452,6 +1744,7 @@ window.__dolceEngine = {
   },
   async setViewMode(m) {
     if (!_app) return;
+    cleanupSustainCursor(_scorePane);
     clearAbLoop(false);
     await _app.setViewMode(m);
     if (_scorePane) hideDiagnosticOverlays(_scorePane);
@@ -1476,6 +1769,7 @@ window.__dolceEngine = {
     _app?.nextPage();
   },
   stopPlayback() {
+    cleanupSustainCursor(_scorePane);
     _app?.stopPlayback();
   },
   getApp: () => _app,
