@@ -632,12 +632,12 @@ function cleanupSustainCursor(scorePane?: HTMLElement | null) {
   _sustainState = null;
 }
 
-/** 取得簡譜音符核心數字的垂直中心與高度（避免高低八度點或減時線拉偏基準） */
+/** 取得簡譜音符數字本體框、垂直中心與高度（避免共用減時線／弧線／八度點拉寬或拉偏基準） */
 function getNoteCoreMetrics(
   el: SVGGraphicsElement,
   invSvgCtm: DOMMatrix,
   fallbackBox: Box2D,
-): { midY: number; height: number } {
+): { box: Box2D; midY: number; height: number } {
   const texts = el.querySelectorAll<SVGTextElement>("text");
   let bestBox: Box2D | null = null;
   let bestH = 0;
@@ -655,9 +655,14 @@ function getNoteCoreMetrics(
   }
 
   if (bestBox && bestH >= 6) {
-    return { midY: (bestBox.minY + bestBox.maxY) * 0.5, height: bestH };
+    return {
+      box: bestBox,
+      midY: (bestBox.minY + bestBox.maxY) * 0.5,
+      height: bestH,
+    };
   }
   return {
+    box: fallbackBox,
     midY: (fallbackBox.minY + fallbackBox.maxY) * 0.5,
     height: Math.max(12, fallbackBox.maxY - fallbackBox.minY),
   };
@@ -667,7 +672,7 @@ function findSustainBoxesForNote(
   svg: SVGSVGElement,
   invSvgCtm: DOMMatrix,
   noteId: ElementId,
-  noteBox: Box2D,
+  coreBox: Box2D,
   coreMidY: number,
   coreH: number,
 ): Box2D[] {
@@ -689,8 +694,16 @@ function findSustainBoxesForNote(
     const midY = (b.minY + b.maxY) * 0.5;
     if (Math.abs(midY - coreMidY) > rowTol) continue;
 
-    if ((entry.kind === "note" && entry.id !== noteId) || (entry.kind as string) === "rest") {
-      if (b.minX > noteBox.maxX - 2 && b.minX < nextBoundaryMinX) {
+    if (entry.kind === "note" && entry.id !== noteId) {
+      const m = getNoteCoreMetrics(g, invSvgCtm, b);
+      if (m.box.minX > coreBox.maxX - 1 && m.box.minX < nextBoundaryMinX) {
+        nextBoundaryMinX = m.box.minX;
+      }
+      continue;
+    }
+
+    if ((entry.kind as string) === "rest") {
+      if (b.minX > coreBox.maxX - 1 && b.minX < nextBoundaryMinX) {
         nextBoundaryMinX = b.minX;
       }
       continue;
@@ -698,15 +711,15 @@ function findSustainBoxesForNote(
 
     if (entry.kind === "sustain") {
       sustainEls.add(g);
+      const cx = (b.minX + b.maxX) * 0.5;
       if (entry.id === noteId) {
         sameIdSustains.push(b);
-      } else if (b.minX > noteBox.maxX - 4) {
+      } else if (cx > coreBox.maxX) {
         nearbySustains.push(b);
       }
     }
   }
 
-  // 檢查非 <g> 葉節點上是否直接標記為 sustain（如 <text> / <line> / <rect> / <path>）
   for (const el of svg.querySelectorAll<SVGGraphicsElement>("text, line, rect, path")) {
     if (el.closest(".sl-ab-band, .sl-ab-marker, .sl-sustain-cursor")) continue;
     let covered = false;
@@ -722,14 +735,14 @@ function findSustainBoxesForNote(
     const midY = (b.minY + b.maxY) * 0.5;
     if (Math.abs(midY - coreMidY) > rowTol) continue;
 
+    const cx = (b.minX + b.maxX) * 0.5;
     if (entry.id === noteId) {
       sameIdSustains.push(b);
-    } else if (b.minX > noteBox.maxX - 4) {
+    } else if (cx > coreBox.maxX) {
       nearbySustains.push(b);
     }
   }
 
-  // 若遇到單獨的 "0" 休止符文字，也作為邊界截斷（避免跨過空拍抓到後續延音）
   for (const txt of svg.querySelectorAll<SVGTextElement>("text")) {
     if (!isRestZeroText(txt.textContent || "")) continue;
     const entry = _app.syncView.entryAt(txt);
@@ -737,7 +750,7 @@ function findSustainBoxesForNote(
     const b = unionBoxInSvgRoot(txt, invSvgCtm, null);
     if (!b) continue;
     const midY = (b.minY + b.maxY) * 0.5;
-    if (Math.abs(midY - coreMidY) <= rowTol && b.minX > noteBox.maxX - 2 && b.minX < nextBoundaryMinX) {
+    if (Math.abs(midY - coreMidY) <= rowTol && b.minX > coreBox.maxX - 1 && b.minX < nextBoundaryMinX) {
       nextBoundaryMinX = b.minX;
     }
   }
@@ -745,9 +758,8 @@ function findSustainBoxesForNote(
   let chosen =
     sameIdSustains.length > 0
       ? sameIdSustains
-      : nearbySustains.filter((b) => b.maxX <= nextBoundaryMinX + 4);
+      : nearbySustains.filter((b) => (b.minX + b.maxX) * 0.5 < nextBoundaryMinX);
 
-  // 後備 1：尋找同列中文字形態的「— / -」延音符號
   if (chosen.length === 0) {
     const dashTexts: Box2D[] = [];
     for (const txt of svg.querySelectorAll<SVGTextElement>("text")) {
@@ -757,14 +769,14 @@ function findSustainBoxesForNote(
       const b = unionBoxInSvgRoot(txt, invSvgCtm, null);
       if (!b) continue;
       const midY = (b.minY + b.maxY) * 0.5;
-      if (Math.abs(midY - coreMidY) <= dashVerticalTol && b.minX > noteBox.maxX - 2 && b.maxX <= nextBoundaryMinX + 4) {
+      const cx = (b.minX + b.maxX) * 0.5;
+      if (Math.abs(midY - coreMidY) <= dashVerticalTol && cx > coreBox.maxX && cx < nextBoundaryMinX) {
         dashTexts.push(b);
       }
     }
     chosen = dashTexts;
   }
 
-  // 後備 2：尋找同列中以 SVG <line>/<rect>/<path> 繪製的水平延音線「—」
   if (chosen.length === 0) {
     const dashShapes: Box2D[] = [];
     for (const shape of svg.querySelectorAll<SVGGraphicsElement>("line, rect, path")) {
@@ -777,13 +789,14 @@ function findSustainBoxesForNote(
       const bw = b.maxX - b.minX;
       const bh = b.maxY - b.minY;
       const midY = (b.minY + b.maxY) * 0.5;
+      const cx = (b.minX + b.maxX) * 0.5;
       if (
         bw >= 4 &&
         bw <= 36 &&
         bh <= 5.5 &&
         Math.abs(midY - coreMidY) <= dashVerticalTol &&
-        b.minX > noteBox.maxX - 1 &&
-        b.maxX <= nextBoundaryMinX + 2
+        cx > coreBox.maxX &&
+        cx < nextBoundaryMinX
       ) {
         dashShapes.push(b);
       }
@@ -801,7 +814,7 @@ function findFollowingRestTargets(
   info: NonNullable<ReturnType<typeof getTimeline>>,
   noteId: ElementId,
   noteSvg: SVGSVGElement,
-  noteBox: Box2D,
+  coreBox: Box2D,
   coreMidY: number,
   coreH: number,
   noteSpan: { from: number; to: number },
@@ -813,10 +826,10 @@ function findFollowingRestTargets(
   const noteSvgIdx = svgs.indexOf(noteSvg);
   if (noteSvgIdx < 0) return { targets: [], nextNoteStart: null };
 
-  const rowTol = Math.max(22, coreH * 1.15);
+  const rowTol = Math.max(18, coreH * 1.05);
   const minRestH = Math.max(6, coreH * 0.45);
 
-  let nextNote: { t: number; svgIdx: number; box: Box2D; midY: number } | null = null;
+  let nextNote: { t: number; svgIdx: number; coreBox: Box2D; midY: number } | null = null;
   const seenNoteIds = new Set<ElementId>();
 
   for (let sIdx = noteSvgIdx; sIdx < svgs.length; sIdx++) {
@@ -835,7 +848,7 @@ function findFollowingRestTargets(
       const b = unionBoxInSvgRoot(g, inv, null);
       if (!b) continue;
       const m = getNoteCoreMetrics(g, inv, b);
-      nextNote = { t, svgIdx: sIdx, box: b, midY: m.midY };
+      nextNote = { t, svgIdx: sIdx, coreBox: m.box, midY: m.midY };
     }
   }
 
@@ -846,8 +859,7 @@ function findFollowingRestTargets(
     return { targets: [], nextNoteStart };
   }
 
-  const collected: (CursorTarget & { svgIdx: number; rowOrder: number })[] = [];
-  const nextMidY = nextNote ? nextNote.midY : Infinity;
+  const collected: { svg: SVGSVGElement; box: Box2D; svgIdx: number; midY: number; relStart?: number; relEnd?: number }[] = [];
 
   for (let sIdx = noteSvgIdx; sIdx <= maxSvgIdx; sIdx++) {
     const svg = svgs[sIdx]!;
@@ -863,7 +875,8 @@ function findFollowingRestTargets(
       if (!entry || (entry.kind as string) !== "rest") continue;
       const b = unionBoxInSvgRoot(g, inv, null);
       if (!b) continue;
-      candidateBoxes.push({ box: b, restId: entry.id });
+      const m = getNoteCoreMetrics(g, inv, b);
+      candidateBoxes.push({ box: m.box, restId: entry.id });
       g.querySelectorAll("text").forEach((t) => coveredTexts.add(t));
     }
 
@@ -871,28 +884,46 @@ function findFollowingRestTargets(
       if (coveredTexts.has(txt)) continue;
       if (!isRestZeroText(txt.textContent || "")) continue;
       const entry = _app.syncView.entryAt(txt);
-      if (entry && (entry.kind === "lyric" || entry.kind === "note")) continue;
+      if (entry && entry.kind === "lyric") continue;
       const b = unionBoxInSvgRoot(txt, inv, null);
       if (!b) continue;
       if (b.maxY - b.minY < minRestH) continue;
-      candidateBoxes.push({ box: b, restId: entry?.id ?? null });
+      candidateBoxes.push({ box: b, restId: null });
     }
 
+    // 去重：避免父子 <g> 或重疊節點重複收錄同一個 0
+    const deduped: { box: Box2D; restId: ElementId | null }[] = [];
     for (const cand of candidateBoxes) {
+      const cx = (cand.box.minX + cand.box.maxX) * 0.5;
+      const cy = (cand.box.minY + cand.box.maxY) * 0.5;
+      const dup = deduped.find((ex) => {
+        const exX = (ex.box.minX + ex.box.maxX) * 0.5;
+        const exY = (ex.box.minY + ex.box.maxY) * 0.5;
+        return Math.abs(cx - exX) <= 4 && Math.abs(cy - exY) <= 6;
+      });
+      if (!dup) {
+        deduped.push(cand);
+      } else if (dup.restId === null && cand.restId !== null) {
+        dup.restId = cand.restId;
+      }
+    }
+
+    for (const cand of deduped) {
       const b = cand.box;
+      const cx = (b.minX + b.maxX) * 0.5;
       const midY = (b.minY + b.maxY) * 0.5;
       const onStartRow = sIdx === noteSvgIdx && Math.abs(midY - coreMidY) <= rowTol;
-      const onEndRow = nextNote !== null && sIdx === nextNote.svgIdx && Math.abs(midY - nextMidY) <= rowTol;
+      const onEndRow = nextNote !== null && sIdx === nextNote.svgIdx && Math.abs(midY - nextNote.midY) <= rowTol;
 
       if (onStartRow && onEndRow) {
-        if (b.minX <= noteBox.maxX - 2 || b.maxX > nextNote!.box.minX + 4) continue;
+        if (cx <= coreBox.maxX + 1 || cx >= nextNote!.coreBox.minX - 1) continue;
       } else if (onStartRow) {
-        if (b.minX <= noteBox.maxX - 2) continue;
+        if (cx <= coreBox.maxX + 1) continue;
       } else if (onEndRow) {
-        if (b.maxX > nextNote!.box.minX + 4) continue;
+        if (cx >= nextNote!.coreBox.minX - 1) continue;
       } else {
         if (sIdx === noteSvgIdx && midY <= coreMidY + rowTol) continue;
-        if (nextNote && sIdx === nextNote.svgIdx && midY >= nextMidY - rowTol) continue;
+        if (nextNote && sIdx === nextNote.svgIdx && midY >= nextNote.midY - rowTol) continue;
         if (!nextNote && sIdx > noteSvgIdx) continue;
       }
 
@@ -900,7 +931,7 @@ function findFollowingRestTargets(
       let relEnd: number | undefined;
       if (cand.restId !== null) {
         const rs = spanSeconds(info.tl, info.spq, { id: cand.restId, pass }, { id: cand.restId, pass });
-        if (rs && rs.to > rs.from) {
+        if (rs && rs.to > rs.from && rs.from >= noteSpan.to - 0.03) {
           relStart = rs.from - noteSpan.from;
           relEnd = rs.to - noteSpan.from;
         }
@@ -910,16 +941,32 @@ function findFollowingRestTargets(
         svg,
         box: b,
         svgIdx: sIdx,
-        rowOrder: Math.round(midY / Math.max(12, rowTol * 0.5)),
+        midY,
         relStart,
         relEnd,
       });
     }
   }
 
-  collected.sort((a, b) => a.svgIdx - b.svgIdx || a.rowOrder - b.rowOrder || a.box.minX - b.box.minX);
+  // 以垂直容差聚類分列後再依 X 由左至右排序，徹底避免跨行半格進位導致順序錯亂
+  collected.sort((a, b) => a.svgIdx - b.svgIdx || a.midY - b.midY);
+  const withRow: (typeof collected[number] & { rowGroup: number })[] = [];
+  let rowGroup = 0;
+  let anchorSvg = -1;
+  let anchorMidY = 0;
+
+  for (const item of collected) {
+    if (item.svgIdx !== anchorSvg || Math.abs(item.midY - anchorMidY) > rowTol) {
+      rowGroup++;
+      anchorSvg = item.svgIdx;
+      anchorMidY = item.midY;
+    }
+    withRow.push({ ...item, rowGroup });
+  }
+
+  withRow.sort((a, b) => a.svgIdx - b.svgIdx || a.rowGroup - b.rowGroup || a.box.minX - b.box.minX);
   return {
-    targets: collected.map(({ svg, box, relStart, relEnd }) => ({ svg, box, relStart, relEnd })),
+    targets: withRow.map(({ svg, box, relStart, relEnd }) => ({ svg, box, relStart, relEnd })),
     nextNoteStart,
   };
 }
@@ -985,11 +1032,23 @@ function stepCachedTargets(
     }
   } else {
     const restDurTotal = Math.max(0.08, totalWindowSec - noteDur);
-    const exactMatch = restTargets.find(
-      (rt) => rt.relStart !== undefined && rt.relEnd !== undefined && elapsedSec >= rt.relStart - 0.01 && elapsedSec < rt.relEnd - 0.01,
+    const allHaveTiming = restTargets.every(
+      (rt, idx) =>
+        rt.relStart !== undefined &&
+        rt.relEnd !== undefined &&
+        rt.relEnd > rt.relStart &&
+        (idx === 0 || rt.relStart >= (restTargets[idx - 1]!.relStart ?? 0) - 0.01),
     );
+    const exactMatch = allHaveTiming
+      ? restTargets.find(
+          (rt) => elapsedSec >= rt.relStart! - 0.01 && elapsedSec < rt.relEnd! - 0.01,
+        )
+      : undefined;
+
     if (exactMatch) {
       activeTarget = exactMatch;
+    } else if (allHaveTiming && elapsedSec >= restTargets[restTargets.length - 1]!.relStart! - 0.01) {
+      activeTarget = restTargets[restTargets.length - 1]!;
     } else {
       const restElapsed = Math.max(0, elapsedSec - noteDur);
       const rIdx = Math.min(restTargets.length - 1, Math.floor((restElapsed / restDurTotal) * restTargets.length));
@@ -1098,33 +1157,35 @@ function updateSustainCursor(
     }
   }
 
-  // 若官方游標本身已經直接位於「—」或「0」上，立刻恢復官方游標顯示即可
-  if (matchedKind !== "note") {
-    cleanupSustainCursor(scorePane);
-    return null;
-  }
-
-  // 若未命中 <g>，檢查是否正落在獨立的「0」休止符或「—」文字上
-  if (matchedId === null) {
-    for (const txt of svg.querySelectorAll<SVGTextElement>("text")) {
-      const content = txt.textContent || "";
-      if (!isRestZeroText(content) && !isSustainDashText(content)) continue;
-      const tr = txt.getBoundingClientRect();
-      if (
-        tr.right >= cursor.rect.left - 4 &&
-        tr.left <= cursor.rect.right + 4 &&
-        tr.bottom >= cursor.rect.top - 4 &&
-        tr.top <= cursor.rect.bottom + 4
-      ) {
-        cleanupSustainCursor(scorePane);
-        return null;
-      }
+  // 同場比較獨立的「0」與「—」文字，若游標中心更靠近 0 / — 則代表官方游標已在該拍上
+  for (const txt of svg.querySelectorAll<SVGTextElement>("text")) {
+    const content = txt.textContent || "";
+    if (!isRestZeroText(content) && !isSustainDashText(content)) continue;
+    const entry = _app.syncView.entryAt(txt);
+    if (entry && entry.kind === "lyric") continue;
+    const tr = txt.getBoundingClientRect();
+    if (tr.width <= 0 && tr.height <= 0) continue;
+    if (
+      tr.right < cursor.rect.left - 4 ||
+      tr.left > cursor.rect.right + 4 ||
+      tr.bottom < cursor.rect.top - 4 ||
+      tr.top > cursor.rect.bottom + 4
+    ) {
+      continue;
     }
-    cleanupSustainCursor(scorePane);
-    return null;
+    const dist =
+      Math.abs((tr.left + tr.right) * 0.5 - curCenterX) +
+      Math.abs((tr.top + tr.bottom) * 0.5 - curCenterY) * 0.25;
+    if (dist <= bestScore) {
+      bestScore = dist;
+      matchedKind = "other";
+      matchedId = null;
+      matchedBox = null;
+      matchedEl = null;
+    }
   }
 
-  if (!matchedBox || !matchedEl) {
+  if (matchedKind !== "note" || matchedId === null || !matchedBox || !matchedEl) {
     cleanupSustainCursor(scorePane);
     return null;
   }
@@ -1164,13 +1225,13 @@ function updateSustainCursor(
     }
 
     const core = getNoteCoreMetrics(matchedEl, invSvgCtm, matchedBox);
-    const sustainBoxes = findSustainBoxesForNote(svg, invSvgCtm, matchedId, matchedBox, core.midY, core.height);
+    const sustainBoxes = findSustainBoxesForNote(svg, invSvgCtm, matchedId, core.box, core.midY, core.height);
     const { targets: restTargets, nextNoteStart } = findFollowingRestTargets(
       scorePane,
       info,
       matchedId,
       svg,
-      matchedBox,
+      core.box,
       core.midY,
       core.height,
       span,
