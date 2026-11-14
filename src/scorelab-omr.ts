@@ -46,7 +46,6 @@ function enhanceScoreContrast(ctx: CanvasRenderingContext2D, w: number, h: numbe
   const lum = new Uint8Array(n);
 
   for (let i = 0, p = 0; i < n; i++, p += 4) {
-    // 含透明底時以白色為底合成，避免透明區域變黑塊
     const a = data[p + 3]!;
     if (a < 250) {
       const alpha = a / 255;
@@ -59,7 +58,6 @@ function enhanceScoreContrast(ctx: CanvasRenderingContext2D, w: number, h: numbe
     }
   }
 
-  // 局部網格估測背景紙張亮度（消除手機拍攝陰影與黃光色偏）
   const block = Math.max(20, Math.min(48, Math.round(Math.min(w, h) / 40)));
   const gw = Math.max(1, Math.ceil(w / block));
   const gh = Math.max(1, Math.ceil(h / block));
@@ -96,7 +94,6 @@ function enhanceScoreContrast(ctx: CanvasRenderingContext2D, w: number, h: numbe
     }
   }
 
-  // 對粗網格做 3x3 平滑，避免單格特大粗黑標題字造成亮暗斷層
   const smoothGrid = new Float32Array(gw * gh);
   for (let gy = 0; gy < gh; gy++) {
     for (let gx = 0; gx < gw; gx++) {
@@ -116,7 +113,6 @@ function enhanceScoreContrast(ctx: CanvasRenderingContext2D, w: number, h: numbe
     }
   }
 
-  // 預建非線性黑白高對比查找表（白底 >= 214 壓純白，黑墨 <= 135 壓純黑，中間階保留抗鋸齒）
   const BLACK_CLIP = 135;
   const WHITE_CLIP = 214;
   const SPAN = WHITE_CLIP - BLACK_CLIP;
@@ -178,7 +174,6 @@ async function maybeOptimizeImage(file: File): Promise<{ bytes: Uint8Array; mime
       const pixels = bmp.width * bmp.height;
       const aspect = maxSide / minSide;
 
-      // 嚴格訂定上限：一般單頁/跨頁上限長邊 2200px、總像素 310 萬；超長拼圖保護寬度並上限 3600px / 360 萬像素
       const limitSide = aspect > 2.5 ? 3600 : 2200;
       const limitPixels = aspect > 2.5 ? 3_600_000 : 3_100_000;
       const scale = Math.min(1, limitSide / maxSide, Math.sqrt(limitPixels / pixels));
@@ -198,10 +193,8 @@ async function maybeOptimizeImage(file: File): Promise<{ bytes: Uint8Array; mime
       ctx.imageSmoothingQuality = "high";
       ctx.drawImage(bmp, 0, 0, w, h);
 
-      // 消除光影、強化白底黑線對比
       enhanceScoreContrast(ctx, w, h);
 
-      // 輸出無損 PNG（純白底黑白譜壓縮率極高，且無 JPEG 振鈴雜訊破壞細譜線）
       const pngBlob = await new Promise<Blob | null>((r) => cv.toBlob(r, "image/png"));
       if (pngBlob) {
         return { bytes: new Uint8Array(await pngBlob.arrayBuffer()), mime: "image/png" };
@@ -244,13 +237,14 @@ let _loadGen = 0;
 // ---- 譜面直接選段 A-B 反覆循環 ----
 let _abLoop: { first: PlayPoint; last: PlayPoint; tFrom: number; tTo: number } | null = null;
 let _abPendingStart: ElementId | null = null;
+let _abPreviewRange: { startId: ElementId; endId: ElementId; tFrom: number; tTo: number } | null = null;
 let _rangePickMode = false;
 
 function notifyRange() {
   _onRangeChange?.({
     active: _abLoop !== null,
     picking: _rangePickMode,
-    hasStart: _abPendingStart !== null,
+    hasStart: _abPendingStart !== null || _abPreviewRange !== null,
   });
 }
 
@@ -268,18 +262,22 @@ function getTimeline() {
   return timelineSeconds(src, _app.playback.options());
 }
 
-/** 觸控／滑鼠點擊容錯：若未直接點中音符 SVG，搜尋半徑內最近的音符 */
+/** 觸控／滑鼠容錯：搜尋點擊／拖曳座標半徑內最近的音符 */
 function findNearestNoteId(
   scorePane: HTMLElement,
   target: Element | null,
   clientX: number,
   clientY: number,
-  maxRadiusPx = 32,
+  maxRadiusPx = 34,
 ): ElementId | null {
   const direct = resolveNoteIdAt(target);
-  if (direct !== null) return direct;
-
   const info = getTimeline();
+  if (direct !== null) {
+    if (!info || anchorSeconds(info.tl, info.spq, { id: direct, pass: 1 }) !== null) {
+      return direct;
+    }
+  }
+
   let bestId: ElementId | null = null;
   let bestDist = maxRadiusPx;
 
@@ -313,11 +311,188 @@ function findNearestNoteId(
   return bestId;
 }
 
-function clearAbBands() {
-  _scorePane?.querySelectorAll(".sl-ab-band").forEach((el) => el.remove());
+// ---- 隱藏紅色／粉紅 OMR 拍數診斷色塊與 +♩ 徽章 ----
+function parseRgbColor(colorStr: string | null | undefined): [number, number, number, number] | null {
+  if (!colorStr || colorStr === "none" || colorStr === "transparent") return null;
+  const m = colorStr.match(/rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)(?:\s*,\s*([\d.]+))?\s*\)/i);
+  if (!m) return null;
+  return [Number(m[1]), Number(m[2]), Number(m[3]), m[4] !== undefined ? Number(m[4]) : 1];
 }
 
-/** 將指定 SVG 元素的 local getBBox() 精確轉換到根 <svg> 座標系並合併外框 */
+function isReddishColor(colorStr: string | null | undefined): boolean {
+  const c = parseRgbColor(colorStr);
+  if (!c || c[3] <= 0.01) return false;
+  const [r, g, b] = c;
+  return r >= 165 && r - g >= 45 && r - b >= 45;
+}
+
+function isOrangeCursorColor(colorStr: string | null | undefined): boolean {
+  const c = parseRgbColor(colorStr);
+  if (!c || c[3] <= 0.01) return false;
+  const [r, g, b] = c;
+  return r >= 175 && g >= 65 && g <= 185 && b <= 135 && r - b >= 65;
+}
+
+function hideDiagnosticOverlays(scorePane: HTMLElement): void {
+  const pages = scorePane.querySelectorAll<HTMLElement>(".score-page-wrap");
+  for (const page of pages) {
+    // 1. 隱藏 SVG 內的紅色虛線拍數警告框與 +♩ / -♩ 紅色提示文字
+    for (const svg of page.querySelectorAll<SVGSVGElement>("svg")) {
+      for (const rect of svg.querySelectorAll<SVGRectElement>("rect")) {
+        if (rect.classList.contains("sl-ab-band") || rect.classList.contains("sl-ab-marker")) continue;
+        const st = getComputedStyle(rect);
+        const dash = rect.getAttribute("stroke-dasharray") || st.strokeDasharray;
+        const hasDash = Boolean(dash && dash !== "none");
+        const reddishStroke = isReddishColor(st.stroke) || isReddishColor(rect.getAttribute("stroke"));
+        const reddishFill = isReddishColor(st.fill) || isReddishColor(rect.getAttribute("fill"));
+        if ((hasDash && (reddishStroke || reddishFill)) || (reddishStroke && reddishFill)) {
+          rect.style.display = "none";
+        }
+      }
+
+      for (const txt of svg.querySelectorAll<SVGTextElement>("text")) {
+        const st = getComputedStyle(txt);
+        const reddish = isReddishColor(st.fill) || isReddishColor(txt.getAttribute("fill"));
+        if (!reddish) continue;
+        const content = (txt.textContent || "").trim();
+        if (/^[+\-−]/.test(content) || /[♩♪♫♬𝅝𝅗𝅥𝅘𝅥𝅘𝅥𝅮𝅘𝅥𝅯]/.test(content) || content.length <= 6) {
+          txt.style.display = "none";
+          const parentG = txt.parentElement;
+          if (parentG && parentG.tagName.toLowerCase() === "g" && parentG.children.length <= 4) {
+            const pFill = getComputedStyle(parentG).fill;
+            if (isReddishColor(pFill) || parentG.querySelectorAll("rect, text, path").length <= 3) {
+              // 若整個 <g> 都是紅色診斷群組，一併隱藏其中的紅色音符符號（如 + ♩ 中的 ♩）
+              for (const child of parentG.children) {
+                const cst = getComputedStyle(child);
+                if (isReddishColor(cst.fill) || isReddishColor(cst.stroke)) {
+                  (child as SVGElement).style.display = "none";
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // 單獨以 <path> + 紅色畫出的診斷附帶小音符（例如緊貼在 + 旁的紅色 ♩ path）
+      for (const g of svg.querySelectorAll<SVGGElement>("g")) {
+        const cls = (g.getAttribute("class") || "").toLowerCase();
+        if (/(err|warn|mismatch|overfill|underfill|beat-diff|diag)/.test(cls)) {
+          const id = resolveNoteIdAt(g);
+          if (id === null) g.style.display = "none";
+        }
+      }
+    }
+
+    // 2. 隱藏 HTML 層可能出現的紅色診斷框或徽章
+    for (const el of page.querySelectorAll<HTMLElement>("div, span")) {
+      if (el.classList.contains("sl-ab-band") || el.classList.contains("sl-ab-marker")) continue;
+      const st = getComputedStyle(el);
+      const dashedRed = st.borderStyle.includes("dashed") && isReddishColor(st.borderColor);
+      const badgeText = (el.textContent || "").trim();
+      const redBadge = isReddishColor(st.color) && (/^[+\-−]/.test(badgeText) || /[♩♪♫𝅗𝅥𝅘𝅥𝅘𝅥𝅮]/.test(badgeText));
+      if (dashedRed || redBadge) {
+        el.style.display = "none";
+      }
+    }
+  }
+}
+
+// ---- 播放自動換行防截斷守護 ----
+let _scrollGuardRaf = 0;
+
+function findPlaybackCursorRect(scorePane: HTMLElement): DOMRect | null {
+  for (const page of scorePane.querySelectorAll<HTMLElement>(".score-page-wrap")) {
+    // 優先找常見游標類別
+    for (const el of page.querySelectorAll<Element>("[class*='cursor' i], [class*='playhead' i]")) {
+      if (el.classList.contains("sl-ab-band") || el.classList.contains("sl-ab-marker")) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width > 0 && r.height >= 12) return r;
+    }
+    // 退而以橙色直條特徵辨識官方 SVG / HTML 動態游標（排除隱藏與我們自己的選段層）
+    for (const rect of page.querySelectorAll<SVGRectElement>("svg rect")) {
+      if (rect.classList.contains("sl-ab-band") || rect.classList.contains("sl-ab-marker")) continue;
+      const st = getComputedStyle(rect);
+      if (st.display === "none" || st.visibility === "hidden") continue;
+      if (!isOrangeCursorColor(st.stroke) && !isOrangeCursorColor(st.fill)) continue;
+      const r = rect.getBoundingClientRect();
+      if (r.width > 1 && r.width <= 60 && r.height >= 16) return r;
+    }
+    for (const div of page.querySelectorAll<HTMLElement>("div")) {
+      const st = getComputedStyle(div);
+      if (st.display === "none" || st.visibility === "hidden") continue;
+      if (!isOrangeCursorColor(st.borderColor) && !isOrangeCursorColor(st.backgroundColor)) continue;
+      const r = div.getBoundingClientRect();
+      if (r.width > 1 && r.width <= 60 && r.height >= 16) return r;
+    }
+  }
+  return null;
+}
+
+function startPlaybackScrollGuard(scorePane: HTMLElement): void {
+  if (_scrollGuardRaf) return;
+  let lastContentTop = -Infinity;
+  let pendingEnsureFrames = 0;
+
+  const step = () => {
+    if (!_app || !_app.playback.busy) {
+      _scrollGuardRaf = 0;
+      return;
+    }
+
+    const curRect = findPlaybackCursorRect(scorePane);
+    if (curRect) {
+      const paneRect = scorePane.getBoundingClientRect();
+      const contentTop = curRect.top - paneRect.top + scorePane.scrollTop;
+
+      // 偵測到跳至新的一行樂譜（或剛開始播放定位）
+      if (Math.abs(contentTop - lastContentTop) > 22) {
+        lastContentTop = contentTop;
+        pendingEnsureFrames = 8;
+      }
+
+      // 預留足夠上下邊界，涵蓋高/低音譜表上方符梁、力度記號與下方符桿加線
+      const padTop = 34;
+      const minSystemSpan = Math.max(curRect.height + 48, 130);
+      const visibleTopNeed = curRect.top - padTop;
+      const visibleBottomNeed = Math.max(curRect.bottom + 42, curRect.top + minSystemSpan);
+
+      const isClippedTop = visibleTopNeed < paneRect.top + 4;
+      const isClippedBottom = visibleBottomNeed > paneRect.bottom - 6;
+
+      if ((pendingEnsureFrames > 0 || isClippedBottom) && (isClippedTop || isClippedBottom)) {
+        const systemTotalH = visibleBottomNeed - visibleTopNeed;
+        const maxScroll = Math.max(0, scorePane.scrollHeight - scorePane.clientHeight);
+        let desiredScrollTop: number;
+
+        if (systemTotalH <= paneRect.height - 16) {
+          // 整行譜表放得進視窗：將該行頂部對齊於視窗上方約 24px 處，讓整行音符與譜線完整呈現
+          desiredScrollTop = scorePane.scrollTop + (visibleTopNeed - paneRect.top) - 16;
+        } else {
+          // 極矮螢幕（橫向手機）：置中對齊游標所在譜表
+          const centerY = (curRect.top + curRect.bottom) * 0.5;
+          desiredScrollTop = scorePane.scrollTop + (centerY - (paneRect.top + paneRect.height * 0.5));
+        }
+
+        desiredScrollTop = Math.max(0, Math.min(maxScroll, desiredScrollTop));
+        if (Math.abs(desiredScrollTop - scorePane.scrollTop) > 3) {
+          scorePane.scrollTop = desiredScrollTop;
+        }
+      }
+
+      if (pendingEnsureFrames > 0) pendingEnsureFrames--;
+    }
+
+    _scrollGuardRaf = requestAnimationFrame(step);
+  };
+
+  _scrollGuardRaf = requestAnimationFrame(step);
+}
+
+// ---- 選段繪製：單一連續半透明底色 + 清晰起點(A)/終點(B)標記 ----
+function clearAbBands() {
+  _scorePane?.querySelectorAll(".sl-ab-band, .sl-ab-marker").forEach((el) => el.remove());
+}
+
 function unionBoxInSvgRoot(
   el: SVGGraphicsElement,
   invSvgCtm: DOMMatrix,
@@ -361,11 +536,78 @@ function unionBoxInSvgRoot(
   return out;
 }
 
+interface NoteRootBox {
+  id: ElementId;
+  t: number;
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
+
+function drawEndpointMarker(
+  svg: SVGSVGElement,
+  x: number,
+  topY: number,
+  botY: number,
+  side: "start" | "end",
+  label: string,
+  color: string,
+) {
+  const NS = "http://www.w3.org/2000/svg";
+  const g = document.createElementNS(NS, "g");
+  g.setAttribute("class", "sl-ab-marker");
+  g.setAttribute("pointer-events", "none");
+
+  const arm = side === "start" ? 7 : -7;
+  const path = document.createElementNS(NS, "path");
+  path.setAttribute("d", `M${x + arm} ${topY} L${x} ${topY} L${x} ${botY} L${x + arm} ${botY}`);
+  path.setAttribute("fill", "none");
+  path.setAttribute("stroke", color);
+  path.setAttribute("stroke-width", "2.2");
+  path.setAttribute("stroke-linecap", "round");
+  path.setAttribute("stroke-linejoin", "round");
+  g.appendChild(path);
+
+  const badgeW = 16;
+  const badgeH = 15;
+  const bx = side === "start" ? x - 2 : x - badgeW + 2;
+  const by = topY - badgeH - 2;
+
+  const bg = document.createElementNS(NS, "rect");
+  bg.setAttribute("x", String(bx));
+  bg.setAttribute("y", String(by));
+  bg.setAttribute("width", String(badgeW));
+  bg.setAttribute("height", String(badgeH));
+  bg.setAttribute("rx", "4");
+  bg.setAttribute("fill", color);
+  g.appendChild(bg);
+
+  const txt = document.createElementNS(NS, "text");
+  txt.setAttribute("x", String(bx + badgeW * 0.5));
+  txt.setAttribute("y", String(by + badgeH * 0.5 + 3.6));
+  txt.setAttribute("text-anchor", "middle");
+  txt.setAttribute("font-size", "10");
+  txt.setAttribute("font-weight", "700");
+  txt.setAttribute("fill", "#ffffff");
+  txt.textContent = label;
+  g.appendChild(txt);
+
+  svg.appendChild(g);
+}
+
 function paintAbBands() {
   clearAbBands();
   if (!_app || !_scorePane) return;
-  if (!_abLoop && _abPendingStart === null) return;
-  const info = _abLoop ? getTimeline() : null;
+
+  const activeRange = _abPreviewRange
+    ? { firstId: _abPreviewRange.startId, lastId: _abPreviewRange.endId, tFrom: _abPreviewRange.tFrom, tTo: _abPreviewRange.tTo, preview: true }
+    : _abLoop
+      ? { firstId: _abLoop.first.id, lastId: _abLoop.last.id, tFrom: _abLoop.tFrom, tTo: _abLoop.tTo, preview: false }
+      : null;
+
+  if (!activeRange && _abPendingStart === null) return;
+  const info = activeRange ? getTimeline() : null;
   const NS = "http://www.w3.org/2000/svg";
 
   for (const svg of _scorePane.querySelectorAll<SVGSVGElement>(".score-page-wrap svg")) {
@@ -373,8 +615,8 @@ function paintAbBands() {
     if (!svgCtm) continue;
     const invSvgCtm = svgCtm.inverse();
 
-    // 以 ElementId 分組，合併每個音符的所有 SVG 部件（符頭、符桿等）為單一精確座標框
-    const boxById = new Map<ElementId, { minX: number; minY: number; maxX: number; maxY: number }>();
+    const matchedNotes: NoteRootBox[] = [];
+    let pendingBox: NoteRootBox | null = null;
 
     if (_app.mode === "mixed") {
       const seenIds = new Set<ElementId>();
@@ -383,72 +625,130 @@ function paintAbBands() {
         if (id === null || seenIds.has(id)) continue;
         seenIds.add(id);
 
-        let hit = false;
-        if (_abPendingStart !== null && id === _abPendingStart) hit = true;
-        else if (_abLoop && info) {
-          const t = anchorSeconds(info.tl, info.spq, { id, pass: 1 });
-          if (t !== null && t >= _abLoop.tFrom - 0.002 && t <= _abLoop.tTo + 0.002) hit = true;
+        if (_abPendingStart !== null && id === _abPendingStart) {
+          let merged: { minX: number; minY: number; maxX: number; maxY: number } | null = null;
+          for (const nel of _app.painter.noteEls(id)) {
+            if (nel.ownerSVGElement === svg) merged = unionBoxInSvgRoot(nel, invSvgCtm, merged);
+          }
+          if (merged) pendingBox = { id, t: 0, ...merged };
         }
-        if (!hit) continue;
 
-        let merged: { minX: number; minY: number; maxX: number; maxY: number } | null = null;
-        for (const nel of _app.painter.noteEls(id)) {
-          if (nel.ownerSVGElement === svg) {
-            merged = unionBoxInSvgRoot(nel, invSvgCtm, merged);
+        if (activeRange && info) {
+          const t = anchorSeconds(info.tl, info.spq, { id, pass: 1 });
+          if (t !== null && t >= activeRange.tFrom - 0.002 && t <= activeRange.tTo + 0.002) {
+            let merged: { minX: number; minY: number; maxX: number; maxY: number } | null = null;
+            for (const nel of _app.painter.noteEls(id)) {
+              if (nel.ownerSVGElement === svg) merged = unionBoxInSvgRoot(nel, invSvgCtm, merged);
+            }
+            if (merged) matchedNotes.push({ id, t, ...merged });
           }
         }
-        if (merged) boxById.set(id, merged);
       }
     } else {
+      const boxById = new Map<ElementId, NoteRootBox>();
       for (const g of svg.querySelectorAll<SVGGElement>("g")) {
         const entry = _app.syncView.entryAt(g);
         if (!entry || entry.kind !== "note") continue;
         const id = entry.id;
 
-        let hit = false;
-        if (_abPendingStart !== null && id === _abPendingStart) hit = true;
-        else if (_abLoop && info) {
-          const t = anchorSeconds(info.tl, info.spq, { id, pass: 1 });
-          if (t !== null && t >= _abLoop.tFrom - 0.002 && t <= _abLoop.tTo + 0.002) hit = true;
+        if (_abPendingStart !== null && id === _abPendingStart) {
+          const merged = unionBoxInSvgRoot(g, invSvgCtm, pendingBox);
+          if (merged) pendingBox = { id, t: 0, ...merged };
         }
-        if (!hit) continue;
 
-        const merged = unionBoxInSvgRoot(g, invSvgCtm, boxById.get(id) ?? null);
-        if (merged) boxById.set(id, merged);
+        if (activeRange && info) {
+          const t = anchorSeconds(info.tl, info.spq, { id, pass: 1 });
+          if (t !== null && t >= activeRange.tFrom - 0.002 && t <= activeRange.tTo + 0.002) {
+            const merged = unionBoxInSvgRoot(g, invSvgCtm, boxById.get(id) ?? null);
+            if (merged) boxById.set(id, { id, t, ...merged });
+          }
+        }
+      }
+      matchedNotes.push(...boxById.values());
+    }
+
+    // 僅長按住起點、尚未拖曳出範圍時：標出起點 A 括號
+    if (pendingBox && !activeRange) {
+      drawEndpointMarker(svg, pendingBox.minX - 6, pendingBox.minY - 6, pendingBox.maxY + 6, "start", "A", "#b88b4a");
+      continue;
+    }
+
+    if (!activeRange || matchedNotes.length === 0) continue;
+
+    // 依時間順序把同屬於同一行譜表的音符合併為連續單一底色色塊（絕不產生一條條雜亂格子）
+    matchedNotes.sort((a, b) => a.t - b.t || a.minX - b.minX);
+
+    interface SystemSpan {
+      minX: number;
+      minY: number;
+      maxX: number;
+      maxY: number;
+      lastX: number;
+      hasStart: boolean;
+      hasEnd: boolean;
+    }
+
+    const systems: SystemSpan[] = [];
+    for (const note of matchedNotes) {
+      const prev = systems[systems.length - 1];
+      const wrappedToNextLine =
+        prev &&
+        ((note.minX < prev.lastX - 45 && note.minY > prev.minY + 28) ||
+          note.minY > prev.maxY + 55 ||
+          note.maxY < prev.minY - 55);
+
+      if (!prev || wrappedToNextLine) {
+        systems.push({
+          minX: note.minX,
+          minY: note.minY,
+          maxX: note.maxX,
+          maxY: note.maxY,
+          lastX: note.minX,
+          hasStart: note.id === activeRange.firstId,
+          hasEnd: note.id === activeRange.lastId,
+        });
+      } else {
+        if (note.minX < prev.minX) prev.minX = note.minX;
+        if (note.minY < prev.minY) prev.minY = note.minY;
+        if (note.maxX > prev.maxX) prev.maxX = note.maxX;
+        if (note.maxY > prev.maxY) prev.maxY = note.maxY;
+        if (note.minX > prev.lastX) prev.lastX = note.minX;
+        if (note.id === activeRange.firstId) prev.hasStart = true;
+        if (note.id === activeRange.lastId) prev.hasEnd = true;
       }
     }
 
-    for (const [id, b] of boxById) {
-      const width = b.maxX - b.minX;
-      const height = b.maxY - b.minY;
-      if (width <= 0 && height <= 0) continue;
+    const tintFill = activeRange.preview ? "rgba(184, 139, 74, 0.16)" : "rgba(91, 122, 98, 0.14)";
+    const markerColor = activeRange.preview ? "#b88b4a" : "#5b7a62";
 
-      const pad = 4;
-      const isPending = _abPendingStart !== null && id === _abPendingStart;
-      const isEndpoint = _abLoop !== null && (id === _abLoop.first.id || id === _abLoop.last.id);
+    for (const sys of systems) {
+      const padX = 7;
+      const padY = 7;
+      const left = sys.minX - padX;
+      const top = sys.minY - padY;
+      const right = sys.maxX + padX;
+      const bottom = sys.maxY + padY;
 
+      // 連續單一半透明選段底色
       const rect = document.createElementNS(NS, "rect");
       rect.setAttribute("class", "sl-ab-band");
-      rect.setAttribute("x", String(b.minX - pad));
-      rect.setAttribute("y", String(b.minY - pad));
-      rect.setAttribute("width", String(width + pad * 2));
-      rect.setAttribute("height", String(height + pad * 2));
-      rect.setAttribute("rx", "4");
-
-      if (isPending) {
-        rect.setAttribute("fill", "rgba(184, 139, 74, 0.28)");
-        rect.setAttribute("stroke", "#b88b4a");
-        rect.setAttribute("stroke-width", "1.6");
-      } else if (isEndpoint) {
-        rect.setAttribute("fill", "rgba(91, 122, 98, 0.25)");
-        rect.setAttribute("stroke", "#5b7a62");
-        rect.setAttribute("stroke-width", "1.6");
-      } else {
-        rect.setAttribute("fill", "rgba(91, 122, 98, 0.16)");
-        rect.setAttribute("stroke", "none");
-      }
+      rect.setAttribute("x", String(left));
+      rect.setAttribute("y", String(top));
+      rect.setAttribute("width", String(Math.max(4, right - left)));
+      rect.setAttribute("height", String(Math.max(8, bottom - top)));
+      rect.setAttribute("rx", "6");
+      rect.setAttribute("fill", tintFill);
+      rect.setAttribute("stroke", "none");
       rect.setAttribute("pointer-events", "none");
       svg.appendChild(rect);
+
+      // 明確繪製起點 [A 與終點 B]
+      if (sys.hasStart) {
+        drawEndpointMarker(svg, left, top, bottom, "start", "A", markerColor);
+      }
+      if (sys.hasEnd) {
+        drawEndpointMarker(svg, right, top, bottom, "end", "B", markerColor);
+      }
     }
   }
 }
@@ -456,6 +756,7 @@ function paintAbBands() {
 function clearAbLoop(stopLoopToggle = true) {
   _abLoop = null;
   _abPendingStart = null;
+  _abPreviewRange = null;
   _rangePickMode = false;
   clearAbBands();
   if (_app && stopLoopToggle) {
@@ -464,126 +765,302 @@ function clearAbLoop(stopLoopToggle = true) {
   notifyRange();
 }
 
-function applyAbLoopByIds(idA: ElementId, idB: ElementId): boolean {
-  if (!_app) return false;
+function buildOrderedRange(idA: ElementId, idB: ElementId) {
   const info = getTimeline();
-  if (!info) return false;
+  if (!info) return null;
   const tA = anchorSeconds(info.tl, info.spq, { id: idA, pass: 1 });
   const tB = anchorSeconds(info.tl, info.spq, { id: idB, pass: 1 });
-  if (tA === null || tB === null) return false;
-
-  let firstId = idA, lastId = idB, tFrom = tA, tTo = tB;
-  if (tA > tB) {
-    firstId = idB; lastId = idA; tFrom = tB; tTo = tA;
+  if (tA === null || tB === null) return null;
+  if (tA <= tB) {
+    return { startId: idA, endId: idB, tFrom: tA, tTo: tB, info };
   }
-  const span = spanSeconds(info.tl, info.spq, { id: firstId, pass: 1 }, { id: lastId, pass: 1 });
+  return { startId: idB, endId: idA, tFrom: tB, tTo: tA, info };
+}
+
+function applyAbLoopByIds(idA: ElementId, idB: ElementId): boolean {
+  if (!_app) return false;
+  const ordered = buildOrderedRange(idA, idB);
+  if (!ordered) return false;
+
+  const span = spanSeconds(
+    ordered.info.tl,
+    ordered.info.spq,
+    { id: ordered.startId, pass: 1 },
+    { id: ordered.endId, pass: 1 },
+  );
   if (!span || span.to <= span.from) return false;
 
-  _abLoop = { first: { id: firstId, pass: 1 }, last: { id: lastId, pass: 1 }, tFrom, tTo };
+  _abLoop = {
+    first: { id: ordered.startId, pass: 1 },
+    last: { id: ordered.endId, pass: 1 },
+    tFrom: ordered.tFrom,
+    tTo: ordered.tTo,
+  };
   _abPendingStart = null;
+  _abPreviewRange = null;
   _rangePickMode = false;
   paintAbBands();
   _app.playback.setLoop(true);
-  _app.playback.seekTo({ id: firstId, pass: 1 });
+  _app.playback.seekTo({ id: ordered.startId, pass: 1 });
   if (!_app.playback.busy) void _app.playback.play();
   notifyRange();
   return true;
 }
 
+/**
+ * 選段互動（電腦＋手機無衝突設計）：
+ * - 手機/觸控螢幕：正常滑動可順暢捲動樂譜；「長按約 350ms 設定起點 → 不離手直接拖曳至終點 → 放開完成選段」。
+ *   （若先點擊工具列的「選段」SVG 鍵，則直接觸控拖曳即可選段，無需長按）
+ * - 電腦滑鼠：直接左鍵按住拖曳（框選／起點拖至終點）即可完成選段。
+ */
 function wireDirectScoreSelection(scorePane: HTMLElement) {
-  let dragStart: { x: number; y: number } | null = null;
-  let dragging = false;
+  const LONG_PRESS_MS = 350;
+  const MOVE_CANCEL_PX = 10;
+
   let suppressClick = false;
-  let marqueeEl: HTMLDivElement | null = null;
 
-  const removeMarquee = () => {
-    marqueeEl?.remove();
-    marqueeEl = null;
+  // ---- 1. 滑鼠拖曳選段 ----
+  let mouseStart: { x: number; y: number; startId: ElementId | null } | null = null;
+  let mouseDragging = false;
+
+  const cleanupMouse = () => {
+    mouseStart = null;
+    mouseDragging = false;
+    _abPreviewRange = null;
   };
 
-  const resetDrag = () => {
-    dragStart = null;
-    dragging = false;
-    removeMarquee();
-  };
-
-  // 滑鼠支援直接框選；觸控螢幕保留原生捲動與雙指縮放，並透過「點選起點 → 點選終點」操作
-  scorePane.addEventListener("pointerdown", (e) => {
+  scorePane.addEventListener("mousedown", (e) => {
     if (e.button !== 0) return;
-    if (e.pointerType === "touch") return;
     const rc = scorePane.getBoundingClientRect();
     if (e.clientX - rc.left >= scorePane.clientLeft + scorePane.clientWidth) return;
-    dragStart = { x: e.clientX, y: e.clientY };
-    dragging = false;
+    const startId = findNearestNoteId(scorePane, e.target as Element | null, e.clientX, e.clientY, 28);
+    mouseStart = { x: e.clientX, y: e.clientY, startId };
+    mouseDragging = false;
   }, true);
 
-  window.addEventListener("pointermove", (e) => {
-    if (!dragStart) return;
-    const dx = e.clientX - dragStart.x;
-    const dy = e.clientY - dragStart.y;
-    if (!dragging && Math.hypot(dx, dy) < 9) return;
-    if (!dragging) {
-      dragging = true;
-      marqueeEl = document.createElement("div");
-      marqueeEl.style.cssText =
-        "position:fixed;pointer-events:none;z-index:9999;border:1.5px solid #5b7a62;" +
-        "background:rgba(91,122,98,0.18);border-radius:4px;";
-      document.body.appendChild(marqueeEl);
+  window.addEventListener("mousemove", (e) => {
+    if (!mouseStart) return;
+    const dx = e.clientX - mouseStart.x;
+    const dy = e.clientY - mouseStart.y;
+    if (!mouseDragging && Math.hypot(dx, dy) < 9) return;
+    if (!mouseDragging) {
+      mouseDragging = true;
+      if (mouseStart.startId === null) {
+        mouseStart.startId = findNearestNoteId(scorePane, null, mouseStart.x, mouseStart.y, 44);
+      }
+      if (mouseStart.startId !== null) {
+        _abPendingStart = mouseStart.startId;
+        notifyRange();
+      }
     }
-    if (marqueeEl) {
-      marqueeEl.style.left = `${Math.min(dragStart.x, e.clientX)}px`;
-      marqueeEl.style.top = `${Math.min(dragStart.y, e.clientY)}px`;
-      marqueeEl.style.width = `${Math.abs(dx)}px`;
-      marqueeEl.style.height = `${Math.abs(dy)}px`;
+
+    if (mouseStart.startId !== null) {
+      const endId = findNearestNoteId(scorePane, e.target as Element | null, e.clientX, e.clientY, 38);
+      if (endId !== null) {
+        const ordered = buildOrderedRange(mouseStart.startId, endId);
+        if (ordered && ordered.tTo > ordered.tFrom) {
+          _abPreviewRange = { startId: ordered.startId, endId: ordered.endId, tFrom: ordered.tFrom, tTo: ordered.tTo };
+          paintAbBands();
+        } else {
+          _abPreviewRange = null;
+          paintAbBands();
+        }
+      }
     }
   });
 
-  window.addEventListener("pointercancel", resetDrag);
+  window.addEventListener("mouseup", (e) => {
+    if (!mouseStart) return;
+    const st = mouseStart;
+    const wasDragging = mouseDragging;
+    cleanupMouse();
 
-  window.addEventListener("pointerup", (e) => {
-    if (!dragStart) return;
-    const start = dragStart;
-    dragStart = null;
-    if (!dragging) return;
-    dragging = false;
+    if (!wasDragging) return;
     suppressClick = true;
-    setTimeout(() => { suppressClick = false; }, 50);
-    removeMarquee();
+    setTimeout(() => { suppressClick = false; }, 60);
 
-    if (!_app) return;
-    const info = getTimeline();
-    if (!info) return;
-
-    const rLeft = Math.min(start.x, e.clientX);
-    const rRight = Math.max(start.x, e.clientX);
-    const rTop = Math.min(start.y, e.clientY);
-    const rBottom = Math.max(start.y, e.clientY);
-
-    let minId: ElementId | null = null, minT = Infinity;
-    let maxId: ElementId | null = null, maxT = -Infinity;
-    const seenIds = new Set<ElementId>();
-
-    for (const g of scorePane.querySelectorAll<SVGGElement>(".score-page-wrap svg g")) {
-      const id = resolveNoteIdAt(g);
-      if (id === null || seenIds.has(id)) continue;
-      const b = g.getBoundingClientRect();
-      if (b.width <= 0 && b.height <= 0) continue;
-      if (b.right < rLeft || b.left > rRight || b.bottom < rTop || b.top > rBottom) continue;
-      seenIds.add(id);
-      const t = anchorSeconds(info.tl, info.spq, { id, pass: 1 });
-      if (t === null) continue;
-      if (t < minT) { minT = t; minId = id; }
-      if (t > maxT) { maxT = t; maxId = id; }
+    if (st.startId !== null) {
+      const endId = findNearestNoteId(scorePane, e.target as Element | null, e.clientX, e.clientY, 44);
+      if (endId !== null && applyAbLoopByIds(st.startId, endId)) {
+        return;
+      }
     }
 
-    if (minId !== null && maxId !== null && maxT > minT) {
-      applyAbLoopByIds(minId, maxId);
-    } else if (minId !== null) {
-      _abLoop = null;
-      _abPendingStart = minId;
-      _rangePickMode = true;
+    // 退而以拖曳矩形範圍內最早與最晚音符作為選段
+    const info = getTimeline();
+    if (info) {
+      const rLeft = Math.min(st.x, e.clientX);
+      const rRight = Math.max(st.x, e.clientX);
+      const rTop = Math.min(st.y, e.clientY);
+      const rBottom = Math.max(st.y, e.clientY);
+      let minId: ElementId | null = null, minT = Infinity;
+      let maxId: ElementId | null = null, maxT = -Infinity;
+      const seen = new Set<ElementId>();
+
+      for (const g of scorePane.querySelectorAll<SVGGElement>(".score-page-wrap svg g")) {
+        const id = resolveNoteIdAt(g);
+        if (id === null || seen.has(id)) continue;
+        const b = g.getBoundingClientRect();
+        if (b.width <= 0 && b.height <= 0) continue;
+        if (b.right < rLeft || b.left > rRight || b.bottom < rTop || b.top > rBottom) continue;
+        seen.add(id);
+        const t = anchorSeconds(info.tl, info.spq, { id, pass: 1 });
+        if (t === null) continue;
+        if (t < minT) { minT = t; minId = id; }
+        if (t > maxT) { maxT = t; maxId = id; }
+      }
+      if (minId !== null && maxId !== null && maxT > minT && applyAbLoopByIds(minId, maxId)) {
+        return;
+      }
+    }
+
+    _abPendingStart = null;
+    paintAbBands();
+    notifyRange();
+  });
+
+  // ---- 2. 手機／觸控：長按設起點 → 拖曳至終點（與單指捲動、雙指縮放零衝突） ----
+  let touchTimer: number | null = null;
+  let touchActive = false;
+  let touchStartPt: { x: number; y: number } | null = null;
+  let touchStartId: ElementId | null = null;
+  let touchEndId: ElementId | null = null;
+
+  const clearTouchTimer = () => {
+    if (touchTimer !== null) {
+      clearTimeout(touchTimer);
+      touchTimer = null;
+    }
+  };
+
+  const resetTouchState = () => {
+    clearTouchTimer();
+    touchActive = false;
+    touchStartPt = null;
+    touchStartId = null;
+    touchEndId = null;
+    _abPreviewRange = null;
+  };
+
+  const activateTouchDrag = (x: number, y: number, target: Element | null) => {
+    const id = findNearestNoteId(scorePane, target, x, y, 42);
+    if (id === null) {
+      resetTouchState();
+      return;
+    }
+    touchActive = true;
+    touchStartId = id;
+    touchEndId = id;
+    _abPendingStart = id;
+    _abPreviewRange = null;
+    try { navigator.vibrate?.(18); } catch {}
+    paintAbBands();
+    notifyRange();
+  };
+
+  scorePane.addEventListener("touchstart", (e) => {
+    if (e.touches.length !== 1) {
+      resetTouchState();
       paintAbBands();
       notifyRange();
+      return;
+    }
+    const t = e.touches[0]!;
+    touchStartPt = { x: t.clientX, y: t.clientY };
+    touchActive = false;
+    touchStartId = null;
+    touchEndId = null;
+
+    if (_rangePickMode) {
+      // 若使用者主動點擊純 SVG「選段」鍵進入選段模式，觸碰即可直接設定起點並拖曳
+      activateTouchDrag(t.clientX, t.clientY, e.target as Element | null);
+    } else {
+      // 一般模式下：長按 350ms 啟動選段，若 350ms 內移動則取消讓原生捲動順利執行
+      clearTouchTimer();
+      const target = e.target as Element | null;
+      const sx = t.clientX;
+      const sy = t.clientY;
+      touchTimer = window.setTimeout(() => {
+        touchTimer = null;
+        activateTouchDrag(sx, sy, target);
+      }, LONG_PRESS_MS);
+    }
+  }, { passive: true, capture: true });
+
+  scorePane.addEventListener("touchmove", (e) => {
+    if (e.touches.length !== 1) {
+      if (touchActive) {
+        resetTouchState();
+        _abPendingStart = null;
+        paintAbBands();
+        notifyRange();
+      } else {
+        clearTouchTimer();
+      }
+      return;
+    }
+    const t = e.touches[0]!;
+
+    if (!touchActive) {
+      if (touchStartPt && Math.hypot(t.clientX - touchStartPt.x, t.clientY - touchStartPt.y) > MOVE_CANCEL_PX) {
+        clearTouchTimer();
+        touchStartPt = null;
+      }
+      return;
+    }
+
+    // 已長按鎖定起點：阻止瀏覽器接管為頁面捲動，即時更新拖曳終點與半透明選段底色
+    e.preventDefault();
+    const elUnder = document.elementFromPoint(t.clientX, t.clientY);
+    const id = findNearestNoteId(scorePane, elUnder, t.clientX, t.clientY, 44);
+    if (id !== null && touchStartId !== null) {
+      touchEndId = id;
+      const ordered = buildOrderedRange(touchStartId, id);
+      if (ordered && ordered.tTo > ordered.tFrom) {
+        _abPreviewRange = { startId: ordered.startId, endId: ordered.endId, tFrom: ordered.tFrom, tTo: ordered.tTo };
+      } else {
+        _abPreviewRange = null;
+      }
+      paintAbBands();
+    }
+  }, { passive: false, capture: true });
+
+  const finishTouch = () => {
+    clearTouchTimer();
+    if (!touchActive) {
+      resetTouchState();
+      return;
+    }
+    const sId = touchStartId;
+    const eId = touchEndId;
+    resetTouchState();
+    suppressClick = true;
+    setTimeout(() => { suppressClick = false; }, 120);
+
+    if (sId !== null && eId !== null && applyAbLoopByIds(sId, eId)) {
+      return;
+    }
+
+    _abPendingStart = null;
+    if (_rangePickMode) _rangePickMode = false;
+    paintAbBands();
+    notifyRange();
+  };
+
+  scorePane.addEventListener("touchend", finishTouch, { capture: true });
+  scorePane.addEventListener("touchcancel", () => {
+    const wasActive = touchActive;
+    resetTouchState();
+    if (wasActive) {
+      _abPendingStart = null;
+      paintAbBands();
+      notifyRange();
+    }
+  }, { capture: true });
+
+  scorePane.addEventListener("contextmenu", (e) => {
+    if (touchActive || touchTimer !== null || _rangePickMode) {
+      e.preventDefault();
     }
   });
 
@@ -592,29 +1069,6 @@ function wireDirectScoreSelection(scorePane: HTMLElement) {
       e.stopPropagation();
       e.preventDefault();
       suppressClick = false;
-      return;
-    }
-    if (!_rangePickMode) return;
-
-    // 選段模式中攔截樂譜點擊，並提供 32px 觸控寬容半徑
-    e.stopPropagation();
-    e.preventDefault();
-
-    const id = findNearestNoteId(scorePane, e.target as Element | null, e.clientX, e.clientY, 32);
-    if (id === null) return;
-
-    if (_abPendingStart === null) {
-      _abLoop = null;
-      _abPendingStart = id;
-      paintAbBands();
-      notifyRange();
-    } else if (_abPendingStart === id) {
-      // 再次點擊同一個起點可取消重選起點
-      _abPendingStart = null;
-      paintAbBands();
-      notifyRange();
-    } else {
-      applyAbLoopByIds(_abPendingStart, id);
     }
   }, true);
 }
@@ -663,7 +1117,12 @@ async function initEngine(opts: MountShellOptions): Promise<App> {
 
     if (opts.playBtn) {
       app.playback.setPlaybackBtn(opts.playBtn);
-      opts.playBtn.addEventListener("click", () => void app.playback.toggle());
+      opts.playBtn.addEventListener("click", () => {
+        void app.playback.toggle();
+        setTimeout(() => {
+          if (app.playback.busy) startPlaybackScrollGuard(opts.scorePane);
+        }, 30);
+      });
     }
     if (opts.stopBtn) app.playback.setStopBtn(opts.stopBtn);
     if (opts.progressEl) app.playback.bindProgress(opts.progressEl, opts.timeEl ?? null);
@@ -678,6 +1137,7 @@ async function initEngine(opts: MountShellOptions): Promise<App> {
         btn.addEventListener("click", async () => {
           clearAbLoop(false);
           await app.setViewMode(mode);
+          hideDiagnosticOverlays(opts.scorePane);
         });
       }
       if (opts.viewSwitch) app.setViewModeButtons(opts.viewSwitch, opts.viewBtns);
@@ -692,6 +1152,22 @@ async function initEngine(opts: MountShellOptions): Promise<App> {
     _onZoomChange?.(app.zoom);
     wireDirectScoreSelection(opts.scorePane);
     notifyRange();
+
+    // 監聽譜面 DOM 變動：即時隱藏紅色診斷色塊，並在播放啟動時掛上換行防截斷守護
+    let diagScheduled = false;
+    const paneObserver = new MutationObserver(() => {
+      if (!diagScheduled) {
+        diagScheduled = true;
+        requestAnimationFrame(() => {
+          diagScheduled = false;
+          hideDiagnosticOverlays(opts.scorePane);
+        });
+      }
+      if (app.playback.busy) {
+        startPlaybackScrollGuard(opts.scorePane);
+      }
+    });
+    paneObserver.observe(opts.scorePane, { childList: true, subtree: true });
 
     void import("./omrkit/runtime.browser").then((m) => m.browserRuntime.prepare("det")).catch(() => {});
 
@@ -735,6 +1211,7 @@ async function recognizeAndRender(
     if (_app.pageEls.length === 0) {
       throw new Error(_app.status || "無法解析此樂譜檔案");
     }
+    if (_scorePane) hideDiagnosticOverlays(_scorePane);
     return { engine: "native-doc", info: "" };
   }
 
@@ -819,6 +1296,7 @@ async function recognizeAndRender(
           await _app.setViewMode("staff");
           await _app.whenIdle();
           if (_app.pageEls.length > 0) {
+            if (_scorePane) hideDiagnosticOverlays(_scorePane);
             showedFirst = true;
             opts.onFirstPageReady?.();
           }
@@ -872,6 +1350,7 @@ async function recognizeAndRender(
   if (_app.pageEls.length === 0) {
     throw new Error(_app.status || "樂譜渲染失敗");
   }
+  if (_scorePane) hideDiagnosticOverlays(_scorePane);
 
   return { engine, info: "" };
 }
@@ -917,6 +1396,7 @@ window.__dolceEngine = {
     if (_app.pageEls.length === 0) {
       throw new Error(_app.status || "樂譜渲染失敗");
     }
+    if (_scorePane) hideDiagnosticOverlays(_scorePane);
   },
   getSnapshot() {
     if (!_app || _app.pageEls.length === 0) return null;
@@ -948,10 +1428,14 @@ window.__dolceEngine = {
     if (_app.pageEls.length === 0) {
       throw new Error(_app.status || "樂譜渲染失敗");
     }
+    if (_scorePane) hideDiagnosticOverlays(_scorePane);
   },
   toggleRangePick() {
     _rangePickMode = !_rangePickMode;
-    if (!_rangePickMode) _abPendingStart = null;
+    if (!_rangePickMode) {
+      _abPendingStart = null;
+      _abPreviewRange = null;
+    }
     paintAbBands();
     notifyRange();
   },
@@ -962,6 +1446,7 @@ window.__dolceEngine = {
     if (!_app) return;
     clearAbLoop(false);
     await _app.setViewMode(m);
+    if (_scorePane) hideDiagnosticOverlays(_scorePane);
   },
   async exportXml() {
     return _app ? _app.musicXmlForSave() : "";
