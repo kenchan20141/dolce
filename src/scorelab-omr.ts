@@ -589,7 +589,8 @@ function parseKeyFifthsInput(raw: string): number | null {
 
 function getSelectedMeasureNumber(totalMeasures: number): number {
   const txt = (_selInfoEl?.textContent || "").trim();
-  const m = txt.match(/第\s*(\d+)\s*小節/) || txt.match(/\bm\.?\s*(\d+)\b/i) || txt.match(/(\d+)/);
+  // 僅匹配明確的小節標記，避免誤抓音名 C4 或拍值 1/4 裡的數字
+  const m = txt.match(/第\s*(\d+)\s*小節/) || txt.match(/小節\s*(\d+)/) || txt.match(/\bm\.?\s*(\d+)\b/i);
   if (m) {
     const num = Number(m[1]);
     if (num >= 1 && num <= totalMeasures) return num;
@@ -597,18 +598,41 @@ function getSelectedMeasureNumber(totalMeasures: number): number {
   return 1;
 }
 
+const ATTR_ORDER = ["footnote", "level", "divisions", "key", "time", "staves", "part-symbol", "instruments", "clef", "staff-details", "transpose", "directive", "measure-style"];
+
+function createXmlEl(doc: XMLDocument, tagName: string): Element {
+  const ns = doc.documentElement?.namespaceURI;
+  return ns ? doc.createElementNS(ns, tagName) : doc.createElement(tagName);
+}
+
 function ensureChildEl(doc: XMLDocument, parent: Element, tagName: string, prepend = false): Element {
-  const found = Array.from(parent.children).find((c) => c.tagName === tagName);
+  const found = Array.from(parent.children).find((c) => c.localName === tagName || c.tagName === tagName);
   if (found) return found;
-  const el = doc.createElement(tagName);
+  const el = createXmlEl(doc, tagName);
+  if (parent.localName === "attributes" || parent.tagName === "attributes") {
+    const myIdx = ATTR_ORDER.indexOf(tagName);
+    if (myIdx >= 0) {
+      const ref = Array.from(parent.children).find((c) => {
+        const ci = ATTR_ORDER.indexOf(c.localName || c.tagName);
+        return ci > myIdx;
+      });
+      if (ref) {
+        parent.insertBefore(el, ref);
+        return el;
+      }
+    }
+  }
   if (prepend && parent.firstChild) parent.insertBefore(el, parent.firstChild);
   else parent.appendChild(el);
   return el;
 }
 
 async function applyMusicXmlFallbackAction(id: string, key = ""): Promise<boolean> {
-  if (!_app || _app.docFormat !== "musicxml") return false;
-  const rawXml = _app.getText();
+  if (!_app) return false;
+  let rawXml = _app.docFormat === "musicxml" ? _app.getText() : "";
+  if (!rawXml) {
+    rawXml = await _app.musicXmlForSave();
+  }
   if (!rawXml) return false;
 
   const parser = new DOMParser();
@@ -617,7 +641,7 @@ async function applyMusicXmlFallbackAction(id: string, key = ""): Promise<boolea
 
   const parts = Array.from(xmlDoc.querySelectorAll("score-partwise > part"));
   if (!parts.length) return false;
-  const firstPartMeasures = Array.from(parts[0]!.children).filter((c) => c.tagName === "measure");
+  const firstPartMeasures = Array.from(parts[0]!.children).filter((c) => c.localName === "measure" || c.tagName === "measure");
   if (!firstPartMeasures.length) return false;
 
   const selMeasNum = getSelectedMeasureNumber(firstPartMeasures.length);
@@ -625,7 +649,7 @@ async function applyMusicXmlFallbackAction(id: string, key = ""): Promise<boolea
   let changed = false;
 
   if (id === "meas.key") {
-    const input = key || window.prompt("輸入調號（例如 C、G、D、F、Bb、Eb 或升記號數 -7 ~ 7）：", "C");
+    const input = key || window.prompt("輸入調號（例如 C、G、D、F、Bb、Eb 或升降記號數 -7 ~ 7）：", "C");
     if (input === null) return false;
     const fifths = parseKeyFifthsInput(input);
     if (fifths === null) {
@@ -633,7 +657,7 @@ async function applyMusicXmlFallbackAction(id: string, key = ""): Promise<boolea
       return false;
     }
     for (const part of parts) {
-      const measures = Array.from(part.children).filter((c) => c.tagName === "measure");
+      const measures = Array.from(part.children).filter((c) => c.localName === "measure" || c.tagName === "measure");
       const mEl = measures[targetIdx] ?? measures[0];
       if (!mEl) continue;
       const attrs = ensureChildEl(xmlDoc, mEl, "attributes", true);
@@ -653,7 +677,7 @@ async function applyMusicXmlFallbackAction(id: string, key = ""): Promise<boolea
     const beats = Math.max(1, Math.min(16, Number(match[1])));
     const beatType = [1, 2, 4, 8, 16, 32].includes(Number(match[2])) ? Number(match[2]) : 4;
     for (const part of parts) {
-      const measures = Array.from(part.children).filter((c) => c.tagName === "measure");
+      const measures = Array.from(part.children).filter((c) => c.localName === "measure" || c.tagName === "measure");
       const mEl = measures[targetIdx] ?? measures[0];
       if (!mEl) continue;
       const attrs = ensureChildEl(xmlDoc, mEl, "attributes", true);
@@ -667,7 +691,7 @@ async function applyMusicXmlFallbackAction(id: string, key = ""): Promise<boolea
       xmlDoc.querySelector("sound[tempo]")?.getAttribute("tempo") ||
       xmlDoc.querySelector("per-minute")?.textContent ||
       "100";
-    const input = key || window.prompt("輸入速度 BPM（40 ~ 240）：", existingTempo);
+    const input = key || window.prompt("輸入速度 BPM（30 ~ 280）：", existingTempo);
     if (input === null) return false;
     const bpm = Math.round(Number(input.trim()));
     if (!Number.isFinite(bpm) || bpm < 30 || bpm > 280) {
@@ -675,29 +699,53 @@ async function applyMusicXmlFallbackAction(id: string, key = ""): Promise<boolea
       return false;
     }
     const mEl = firstPartMeasures[targetIdx] ?? firstPartMeasures[0]!;
+
+    // 更新或建立可視化的 <direction><direction-type><metronome>（才會畫在譜面上）
+    let dirEl = Array.from(mEl.children).find(
+      (c) => (c.localName === "direction" || c.tagName === "direction") && c.querySelector("metronome"),
+    );
+    if (!dirEl) {
+      dirEl = createXmlEl(xmlDoc, "direction");
+      dirEl.setAttribute("placement", "above");
+      const dtEl = createXmlEl(xmlDoc, "direction-type");
+      const metEl = createXmlEl(xmlDoc, "metronome");
+      const buEl = createXmlEl(xmlDoc, "beat-unit");
+      buEl.textContent = "quarter";
+      const pmEl = createXmlEl(xmlDoc, "per-minute");
+      pmEl.textContent = String(bpm);
+      metEl.appendChild(buEl);
+      metEl.appendChild(pmEl);
+      dtEl.appendChild(metEl);
+      dirEl.appendChild(dtEl);
+
+      // 插在 attributes 之後、第一個 note 之前
+      const firstNote = Array.from(mEl.children).find((c) => c.localName === "note" || c.tagName === "note");
+      if (firstNote) mEl.insertBefore(dirEl, firstNote);
+      else mEl.appendChild(dirEl);
+    } else {
+      const metEl = ensureChildEl(xmlDoc, ensureChildEl(xmlDoc, dirEl, "direction-type"), "metronome");
+      ensureChildEl(xmlDoc, metEl, "beat-unit").textContent = "quarter";
+      ensureChildEl(xmlDoc, metEl, "per-minute").textContent = String(bpm);
+    }
+
     let soundEl = mEl.querySelector("sound[tempo]");
     if (!soundEl) {
-      soundEl = xmlDoc.createElement("sound");
-      mEl.insertBefore(soundEl, mEl.firstChild);
+      soundEl = createXmlEl(xmlDoc, "sound");
+      dirEl.appendChild(soundEl);
     }
     soundEl.setAttribute("tempo", String(bpm));
-
-    const perMinEl = mEl.querySelector("direction direction-type metronome per-minute");
-    if (perMinEl) {
-      perMinEl.textContent = String(bpm);
-    }
     changed = true;
   } else if (id === "brk.line" || id === "brk.page") {
     const attrName = id === "brk.line" ? "new-system" : "new-page";
     const breakIdx = targetIdx === 0 && firstPartMeasures.length > 1 ? 1 : targetIdx;
     if (breakIdx === 0) return false;
     for (const part of parts) {
-      const measures = Array.from(part.children).filter((c) => c.tagName === "measure");
+      const measures = Array.from(part.children).filter((c) => c.localName === "measure" || c.tagName === "measure");
       const mEl = measures[breakIdx];
       if (!mEl) continue;
-      let printEl = Array.from(mEl.children).find((c) => c.tagName === "print");
+      let printEl = Array.from(mEl.children).find((c) => c.localName === "print" || c.tagName === "print");
       if (!printEl) {
-        printEl = xmlDoc.createElement("print");
+        printEl = createXmlEl(xmlDoc, "print");
         mEl.insertBefore(printEl, mEl.firstChild);
       }
       const cur = printEl.getAttribute(attrName) === "yes";
@@ -724,15 +772,15 @@ async function applyMusicXmlFallbackAction(id: string, key = ""): Promise<boolea
     }
     const measDur = Math.max(1, Math.round(beats * (4 / beatType) * divs));
     for (const part of parts) {
-      const measures = Array.from(part.children).filter((c) => c.tagName === "measure");
-      const newMeas = xmlDoc.createElement("measure");
+      const measures = Array.from(part.children).filter((c) => c.localName === "measure" || c.tagName === "measure");
+      const newMeas = createXmlEl(xmlDoc, "measure");
       newMeas.setAttribute("number", String(measures.length + 1));
-      const note = xmlDoc.createElement("note");
-      note.appendChild(xmlDoc.createElement("rest"));
-      const dur = xmlDoc.createElement("duration");
+      const note = createXmlEl(xmlDoc, "note");
+      note.appendChild(createXmlEl(xmlDoc, "rest"));
+      const dur = createXmlEl(xmlDoc, "duration");
       dur.textContent = String(measDur);
       note.appendChild(dur);
-      const voice = xmlDoc.createElement("voice");
+      const voice = createXmlEl(xmlDoc, "voice");
       voice.textContent = "1";
       note.appendChild(voice);
       newMeas.appendChild(note);
@@ -742,10 +790,10 @@ async function applyMusicXmlFallbackAction(id: string, key = ""): Promise<boolea
   } else if (id === "meas.delete") {
     if (firstPartMeasures.length <= 1) return false;
     for (const part of parts) {
-      const measures = Array.from(part.children).filter((c) => c.tagName === "measure");
+      const measures = Array.from(part.children).filter((c) => c.localName === "measure" || c.tagName === "measure");
       const target = measures[targetIdx];
       if (target) target.remove();
-      const restMeasures = Array.from(part.children).filter((c) => c.tagName === "measure");
+      const restMeasures = Array.from(part.children).filter((c) => c.localName === "measure" || c.tagName === "measure");
       restMeasures.forEach((m, i) => m.setAttribute("number", String(i + 1)));
     }
     changed = true;
@@ -754,7 +802,9 @@ async function applyMusicXmlFallbackAction(id: string, key = ""): Promise<boolea
   if (!changed) return false;
 
   const newXml = new XMLSerializer().serializeToString(xmlDoc);
-  const keepView = _app.viewMode;
+  const keepView = _app.viewMode === "original" ? "expanded" : _app.viewMode;
+  _app.stopPlayback();
+  _app.clearPages();
   if (_app.adoptStaffXml(newXml)) {
     await _app.setViewMode(keepView);
     await _app.whenIdle();
@@ -799,7 +849,6 @@ function getTimeline() {
   return timelineSeconds(src, _app.playback.options());
 }
 
-/** 觸控／滑鼠容錯：搜尋點擊／拖曳座標半徑內最近的音符 */
 function findNearestNoteId(
   scorePane: HTMLElement,
   target: Element | null,
@@ -2892,7 +2941,6 @@ window.__dolceEngine = {
     if (!_app || !_editMode) return false;
     if (!_app.syncFresh()) _app.reloadNow();
 
-    // 若尚未選取音符且非純導覽指令，先自動選取第一個元素，避免無選取導致動作無效
     if (!id.startsWith("nav.") && !id.startsWith("edit.") && !id.startsWith("mode.")) {
       const selTxt = (_selInfoEl?.textContent || "").trim();
       if (!selTxt || /未選|無選/.test(selTxt)) {
@@ -2904,10 +2952,9 @@ window.__dolceEngine = {
     const ok = _app.visual.runById(id, key);
     const changed = _app.getText() !== beforeText;
 
-    // 針對調號、拍號、速度、換行、換頁、增刪小節，若底層未處理則以 MusicXML 後備方案執行
     if (
-      (!ok || (!changed && ["meas.key", "meas.time", "meas.tempo", "brk.line", "brk.page", "meas.append", "meas.delete"].includes(id))) &&
-      ["meas.key", "meas.time", "meas.tempo", "brk.line", "brk.page", "meas.append", "meas.delete"].includes(id)
+      ["meas.key", "meas.time", "meas.tempo", "brk.line", "brk.page", "meas.append", "meas.delete"].includes(id) &&
+      (!ok || !changed)
     ) {
       const fbOk = await applyMusicXmlFallbackAction(id, key);
       _scorePane?.focus({ preventScroll: true });
