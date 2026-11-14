@@ -1,5 +1,4 @@
 
-
 import "./styles.css";
 import { MetaData } from "./smufl/smufl";
 import { setMeasureBackend } from "./common/measure";
@@ -186,8 +185,8 @@ async function registerBravura() {
   for (const f of faces) (document.fonts as FontFaceSet).add(f);
 }
 
-/** 僅在明顯光影不均／昏暗紙本拍照時才啟用背景校正，數位白底樂譜保持原色原圖 */
-function needsShadowCorrection(data: Uint8ClampedArray, w: number, h: number): boolean {
+/** 快速抽樣判斷是否已是乾淨白底數位樂譜，若是則免跑逐像素光影運算 */
+function isAlreadyCleanWhiteBg(data: Uint8ClampedArray, w: number, h: number): boolean {
   const stepX = Math.max(1, Math.floor(w / 36));
   const stepY = Math.max(1, Math.floor(h / 36));
   let total = 0;
@@ -205,19 +204,18 @@ function needsShadowCorrection(data: Uint8ClampedArray, w: number, h: number): b
       const b = data[p + 2]! * alpha + 255 * (1 - alpha);
       const lum = (77 * r + 150 * g + 29 * b + 128) >> 8;
       total++;
-      if (lum >= 240) brightWhite++;
-      else if (lum >= 115 && lum < 232) dimGrayBg++;
+      if (lum >= 244) brightWhite++;
+      else if (lum >= 120 && lum < 238) dimGrayBg++;
     }
   }
-  return total > 0 && brightWhite / total < 0.65 && dimGrayBg / total > 0.18;
+  return total > 0 && brightWhite / total >= 0.82 && dimGrayBg / total <= 0.08;
 }
 
-/** 保留色彩與反鋸齒的柔和局部背景提亮（不轉黑白、不做硬二值化裁切） */
-function normalizeUnevenLightingKeepColor(ctx: CanvasRenderingContext2D, w: number, h: number): boolean {
+function enhanceScoreContrast(ctx: CanvasRenderingContext2D, w: number, h: number): boolean {
   const imgData = ctx.getImageData(0, 0, w, h);
   const data = imgData.data;
 
-  if (!needsShadowCorrection(data, w, h)) {
+  if (isAlreadyCleanWhiteBg(data, w, h)) {
     return false;
   }
 
@@ -237,7 +235,7 @@ function normalizeUnevenLightingKeepColor(ctx: CanvasRenderingContext2D, w: numb
     }
   }
 
-  const block = Math.max(24, Math.min(56, Math.round(Math.min(w, h) / 36)));
+  const block = Math.max(20, Math.min(48, Math.round(Math.min(w, h) / 40)));
   const gw = Math.max(1, Math.ceil(w / block));
   const gh = Math.max(1, Math.ceil(h / block));
   const grid = new Float32Array(gw * gh);
@@ -288,7 +286,20 @@ function normalizeUnevenLightingKeepColor(ctx: CanvasRenderingContext2D, w: numb
           wsum += wt;
         }
       }
-      smoothGrid[gy * gw + gx] = Math.max(48, sum / wsum);
+      smoothGrid[gy * gw + gx] = Math.max(36, sum / wsum);
+    }
+  }
+
+  const BLACK_CLIP = 95;
+  const WHITE_CLIP = 230;
+  const SPAN = WHITE_CLIP - BLACK_CLIP;
+  const lut = new Uint8Array(256);
+  for (let v = 0; v < 256; v++) {
+    if (v <= BLACK_CLIP) lut[v] = 0;
+    else if (v >= WHITE_CLIP) lut[v] = 255;
+    else {
+      const t = (v - BLACK_CLIP) / SPAN;
+      lut[v] = Math.round(Math.pow(t, 1.15) * 255);
     }
   }
 
@@ -314,17 +325,12 @@ function normalizeUnevenLightingKeepColor(ctx: CanvasRenderingContext2D, w: numb
       const bg = (b00 * (1 - tx) + b10 * tx) * ity + (b01 * (1 - tx) + b11 * tx) * ty;
 
       const idx = rowOff + x;
+      const norm = Math.min(255, Math.max(0, Math.round((lum[idx]! * 255) / bg)));
+      const out = lut[norm]!;
       const p = idx * 4;
-      const a = data[p + 3]!;
-      const alpha = a < 250 ? a / 255 : 1;
-      const r = data[p]! * alpha + 255 * (1 - alpha);
-      const g = data[p + 1]! * alpha + 255 * (1 - alpha);
-      const b = data[p + 2]! * alpha + 255 * (1 - alpha);
-
-      const gain = bg < 250 ? Math.min(2.2, 255 / bg) : 1;
-      data[p] = Math.min(255, Math.round(r * gain));
-      data[p + 1] = Math.min(255, Math.round(g * gain));
-      data[p + 2] = Math.min(255, Math.round(b * gain));
+      data[p] = out;
+      data[p + 1] = out;
+      data[p + 2] = out;
       data[p + 3] = 255;
     }
   }
@@ -346,9 +352,8 @@ async function maybeOptimizeImage(file: File): Promise<{ bytes: Uint8Array; mime
       const pixels = bmp.width * bmp.height;
       const aspect = maxSide / minSide;
 
-      // 提高解析度上限，避免清晰的雙行鋼琴譜被過度縮圖導致細線與雙橫樑糊掉
-      const limitSide = aspect > 2.5 ? 4800 : 3600;
-      const limitPixels = aspect > 2.5 ? 8_000_000 : 7_500_000;
+      const limitSide = aspect > 2.5 ? 3600 : 2200;
+      const limitPixels = aspect > 2.5 ? 3_600_000 : 3_100_000;
       const scale = Math.min(1, limitSide / maxSide, Math.sqrt(limitPixels / pixels));
 
       const w = Math.max(1, Math.round(bmp.width * scale));
@@ -366,7 +371,7 @@ async function maybeOptimizeImage(file: File): Promise<{ bytes: Uint8Array; mime
       ctx.imageSmoothingQuality = "high";
       ctx.drawImage(bmp, 0, 0, w, h);
 
-      const modified = normalizeUnevenLightingKeepColor(ctx, w, h);
+      const modified = enhanceScoreContrast(ctx, w, h);
       if (!modified && scale >= 0.999) {
         return { bytes: raw, mime };
       }
