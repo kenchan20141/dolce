@@ -261,17 +261,33 @@ export interface MountShellOptions {
   metroBtn?: HTMLButtonElement | null;
   viewSwitch?: HTMLElement | null;
   viewBtns?: ReadonlyMap<ViewMode, HTMLButtonElement>;
+  editToggleBtn?: HTMLButtonElement | null;
+  editPanel?: HTMLElement | null;
+  visualEls?: {
+    mode: HTMLElement | null;
+    selInfo?: HTMLElement | null;
+    marksBtn: HTMLButtonElement | null;
+    beatBtn: HTMLButtonElement | null;
+    beatCount: HTMLElement | null;
+    palette: HTMLElement | null;
+    paletteBtn: HTMLButtonElement | null;
+  };
   onZoomChange?: (zoom: number) => void;
   onRangeChange?: (state: { active: boolean; picking: boolean; hasStart: boolean }) => void;
+  onEditModeChange?: (editing: boolean) => void;
 }
 
 let _appPromise: Promise<App> | null = null;
 let _app: App | null = null;
 let _scorePane: HTMLElement | null = null;
 let _progressEl: HTMLInputElement | null = null;
+let _editToggleBtn: HTMLButtonElement | null = null;
+let _editPanel: HTMLElement | null = null;
 let _onZoomChange: ((z: number) => void) | undefined;
 let _onRangeChange: MountShellOptions["onRangeChange"];
+let _onEditModeChange: MountShellOptions["onEditModeChange"];
 let _loadGen = 0;
+let _editMode = false;
 
 // ---- 譜面直接選段 A-B 反覆循環 ----
 let _abLoop: { first: PlayPoint; last: PlayPoint; tFrom: number; tTo: number } | null = null;
@@ -285,6 +301,37 @@ function notifyRange() {
     picking: _rangePickMode,
     hasStart: _abPendingStart !== null || _abPreviewRange !== null,
   });
+}
+
+function applyEditMode(on: boolean) {
+  _editMode = on;
+  if (_editToggleBtn) {
+    _editToggleBtn.classList.toggle("active", on);
+    _editToggleBtn.setAttribute("aria-pressed", String(on));
+  }
+  if (_editPanel) {
+    _editPanel.classList.toggle("hidden", !on);
+  }
+  if (_app) {
+    if (on) {
+      if (_rangePickMode) {
+        _rangePickMode = false;
+        _abPendingStart = null;
+        _abPreviewRange = null;
+        paintAbBands();
+        notifyRange();
+      }
+      _app.visual.showPalette = true;
+      _app.visual.beatCheck = true;
+      _app.visual.afterRebuild();
+      _scorePane?.focus({ preventScroll: true });
+    } else {
+      _app.visual.showPalette = false;
+      _app.visual.afterRebuild();
+      if (_scorePane) hideDiagnosticOverlays(_scorePane);
+    }
+  }
+  _onEditModeChange?.(on);
 }
 
 function resolveNoteIdAt(el: Element | null): ElementId | null {
@@ -350,7 +397,7 @@ function findNearestNoteId(
   return bestId;
 }
 
-// ---- 隱藏粉紅／紅色拍數診斷色塊與 +♩ 徽章（嚴格保護橙色動態播放游標） ----
+// ---- 隱藏粉紅／紅色拍數診斷色塊與 +♩ 徽章（修譜模式關閉時才隱藏，修譜時保留供對拍用） ----
 function parseRgbColor(colorStr: string | null | undefined): [number, number, number, number] | null {
   if (!colorStr || colorStr === "none" || colorStr === "transparent") return null;
   const m = colorStr.match(/rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)(?:\s*,\s*([\d.]+))?\s*\)/i);
@@ -387,6 +434,7 @@ function isProtectedCursorEl(el: Element): boolean {
 }
 
 function hideDiagnosticOverlays(scorePane: HTMLElement): void {
+  if (_editMode) return;
   const pages = scorePane.querySelectorAll<HTMLElement>(".score-page-wrap");
   for (const page of pages) {
     for (const svg of page.querySelectorAll<SVGSVGElement>("svg")) {
@@ -1627,7 +1675,7 @@ function applyAbLoopByIds(idA: ElementId, idB: ElementId): boolean {
 }
 
 /**
- * 選段互動（電腦＋手機無衝突設計）：
+ * 選段互動（電腦＋手機無衝突設計；修譜模式開啟時暫讓給可視化編輯）：
  * - 手機/觸控螢幕：正常滑動可順暢捲動樂譜；「長按約 350ms 設定起點 → 不離手直接拖曳至終點 → 放開完成選段」。
  *   （若先點擊工具列的「選段」SVG 鍵，則直接觸控拖曳即可選段，無需長按）
  * - 電腦滑鼠：直接左鍵按住拖曳（起點拖至終點）即可完成選段。
@@ -1650,6 +1698,7 @@ function wireDirectScoreSelection(scorePane: HTMLElement) {
 
   scorePane.addEventListener("mousedown", (e) => {
     if (e.button !== 0) return;
+    if (_editMode && !_rangePickMode) return;
     const rc = scorePane.getBoundingClientRect();
     if (e.clientX - rc.left >= scorePane.clientLeft + scorePane.clientWidth) return;
     const startId = findNearestNoteId(scorePane, e.target as Element | null, e.clientX, e.clientY, 28);
@@ -1783,6 +1832,7 @@ function wireDirectScoreSelection(scorePane: HTMLElement) {
       notifyRange();
       return;
     }
+    if (_editMode && !_rangePickMode) return;
     const t = e.touches[0]!;
     touchStartPt = { x: t.clientX, y: t.clientY };
     touchActive = false;
@@ -1929,8 +1979,11 @@ function scheduleBackgroundPreload() {
 async function initEngine(opts: MountShellOptions): Promise<App> {
   _onZoomChange = opts.onZoomChange;
   _onRangeChange = opts.onRangeChange;
+  _onEditModeChange = opts.onEditModeChange;
   _scorePane = opts.scorePane;
   _progressEl = opts.progressEl ?? null;
+  _editToggleBtn = opts.editToggleBtn ?? null;
+  _editPanel = opts.editPanel ?? null;
   if (_app) return _app;
   if (_appPromise) return _appPromise;
 
@@ -1957,6 +2010,15 @@ async function initEngine(opts: MountShellOptions): Promise<App> {
     const app = new App(meta, opts.scorePane);
     app.statusEl = opts.statusEl ?? null;
     app.loadSettings();
+
+    // 掛載原版可視化修譜控制器（預設關閉修譜模式，待使用者點擊「修譜」才啟用）
+    if (opts.visualEls) {
+      app.visual.attach(opts.visualEls);
+    }
+    const origVisualEnabled = app.visualEnabled.bind(app);
+    app.visualEnabled = () => _editMode && origVisualEnabled();
+    app.visual.showPalette = false;
+
     app.mountEditor(opts.hiddenCodePane, SAMPLE);
     app.stopPlayback();
     app.clearPages();
@@ -1997,9 +2059,16 @@ async function initEngine(opts: MountShellOptions): Promise<App> {
           clearAbLoop(false);
           await app.setViewMode(mode);
           hideDiagnosticOverlays(opts.scorePane);
+          app.visual.afterRebuild();
         });
       }
       if (opts.viewSwitch) app.setViewModeButtons(opts.viewSwitch, opts.viewBtns);
+    }
+
+    if (opts.editToggleBtn) {
+      opts.editToggleBtn.addEventListener("click", () => {
+        applyEditMode(!_editMode);
+      });
     }
 
     attachPinchZoom(opts.scorePane, {
@@ -2091,6 +2160,7 @@ async function recognizeAndRender(
       throw new Error(_app.status || "無法解析此樂譜檔案");
     }
     if (_scorePane) hideDiagnosticOverlays(_scorePane);
+    _app.visual.afterRebuild();
     onProgress(1);
     return { engine: "native-doc", info: "" };
   }
@@ -2233,6 +2303,7 @@ async function recognizeAndRender(
     throw new Error(_app.status || "樂譜渲染失敗");
   }
   if (_scorePane) hideDiagnosticOverlays(_scorePane);
+  _app.visual.afterRebuild();
   onProgress(1);
 
   return { engine, info: "" };
@@ -2247,6 +2318,8 @@ declare global {
       loadXmlText: (xml: string, viewMode?: ViewMode) => Promise<void>;
       getSnapshot: () => ScoreSnapshot | null;
       loadSnapshot: (snap: Pick<ScoreSnapshot, "format" | "text" | "viewMode">) => Promise<void>;
+      setEditMode: (on: boolean) => void;
+      isEditMode: () => boolean;
       toggleRangePick: () => void;
       clearRangeLoop: () => void;
       setViewMode: (m: ViewMode) => Promise<void>;
@@ -2281,6 +2354,7 @@ window.__dolceEngine = {
       throw new Error(_app.status || "樂譜渲染失敗");
     }
     if (_scorePane) hideDiagnosticOverlays(_scorePane);
+    _app.visual.afterRebuild();
   },
   getSnapshot() {
     if (!_app || _app.pageEls.length === 0) return null;
@@ -2314,8 +2388,16 @@ window.__dolceEngine = {
       throw new Error(_app.status || "樂譜渲染失敗");
     }
     if (_scorePane) hideDiagnosticOverlays(_scorePane);
+    _app.visual.afterRebuild();
+  },
+  setEditMode(on) {
+    applyEditMode(on);
+  },
+  isEditMode() {
+    return _editMode;
   },
   toggleRangePick() {
+    if (_editMode) applyEditMode(false);
     _rangePickMode = !_rangePickMode;
     if (!_rangePickMode) {
       _abPendingStart = null;
@@ -2333,6 +2415,7 @@ window.__dolceEngine = {
     clearAbLoop(false);
     await _app.setViewMode(m);
     if (_scorePane) hideDiagnosticOverlays(_scorePane);
+    _app.visual.afterRebuild();
   },
   async exportXml() {
     return _app ? _app.musicXmlForSave() : "";
