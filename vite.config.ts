@@ -1,3 +1,4 @@
+
 import { defineConfig, type Plugin } from "vite";
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
