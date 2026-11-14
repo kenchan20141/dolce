@@ -60,10 +60,11 @@ function isAlreadyCleanWhiteBg(data: Uint8ClampedArray, w: number, h: number): b
 }
 
 /**
- * 將手拍照片或過大圖檔做「尺寸上限控管」＋「陰影光影去除」＋「白底黑字高對比強化」：
- * 1. 限制最大長邊與總像素上限，避免超高畫素照片拖慢辨識，同時保留譜線與符頭辨識精度。
- * 2. 若偵測到陰影／偏暗紙張，透過局部網格估測紙張底色並雙線性內插，將底色壓為純白 #FFFFFF、符號壓為純黑 #000000。
- * 3. 以高畫質 JPEG 輸出，讓 PDF 封裝與 OMR 引擎以最快速度處理。
+ * 將手拍照片或過大圖檔做「尺寸上限控管」＋「陰影光影去除」＋「白底黑字對比強化」：
+ * 1. 限制最大長邊與總像素上限，避免超高畫素照片拖慢辨識，同時保留譜線、符頭與細小跳轉記號精度。
+ * 2. 若偵測到陰影／偏暗紙張，透過局部網格估測紙張底色並雙線性內插，將底色還原為純白、符號強化為深黑，
+ *    並放寬黑白裁切區間以免吃掉 D.S. / Coda / 1. / 2. 等小字。
+ * 3. 優先輸出無損 PNG 保留字跡與記號銳利度。
  */
 function enhanceScoreContrast(ctx: CanvasRenderingContext2D, w: number, h: number): boolean {
   const imgData = ctx.getImageData(0, 0, w, h);
@@ -144,8 +145,8 @@ function enhanceScoreContrast(ctx: CanvasRenderingContext2D, w: number, h: numbe
     }
   }
 
-  const BLACK_CLIP = 135;
-  const WHITE_CLIP = 214;
+  const BLACK_CLIP = 95;
+  const WHITE_CLIP = 230;
   const SPAN = WHITE_CLIP - BLACK_CLIP;
   const lut = new Uint8Array(256);
   for (let v = 0; v < 256; v++) {
@@ -153,7 +154,7 @@ function enhanceScoreContrast(ctx: CanvasRenderingContext2D, w: number, h: numbe
     else if (v >= WHITE_CLIP) lut[v] = 255;
     else {
       const t = (v - BLACK_CLIP) / SPAN;
-      lut[v] = Math.round(Math.pow(t, 1.5) * 255);
+      lut[v] = Math.round(Math.pow(t, 1.15) * 255);
     }
   }
 
@@ -230,13 +231,13 @@ async function maybeOptimizeImage(file: File): Promise<{ bytes: Uint8Array; mime
         return { bytes: raw, mime };
       }
 
-      const jpgBlob = await new Promise<Blob | null>((r) => cv.toBlob(r, "image/jpeg", 0.93));
-      if (jpgBlob) {
-        return { bytes: new Uint8Array(await jpgBlob.arrayBuffer()), mime: "image/jpeg" };
-      }
       const pngBlob = await new Promise<Blob | null>((r) => cv.toBlob(r, "image/png"));
       if (pngBlob) {
         return { bytes: new Uint8Array(await pngBlob.arrayBuffer()), mime: "image/png" };
+      }
+      const jpgBlob = await new Promise<Blob | null>((r) => cv.toBlob(r, "image/jpeg", 0.95));
+      if (jpgBlob) {
+        return { bytes: new Uint8Array(await jpgBlob.arrayBuffer()), mime: "image/jpeg" };
       }
       return { bytes: raw, mime };
     } finally {
@@ -530,14 +531,40 @@ function clientRectToSvgRoot(
   return { minX, minY, maxX, maxY };
 }
 
-// ---- 播放游標偵測 ＋ 簡譜延音橫線（-）動態游標推進 ＋ 換行防截斷守護 ----
+// ---- 播放游標偵測 ＋ 簡譜延音橫線（-）與連續休止符（0）動態游標推進 ＋ 換行防截斷守護 ----
+interface Box2D {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
+
+interface CursorTarget {
+  svg: SVGSVGElement;
+  box: Box2D;
+  relStart?: number;
+  relEnd?: number;
+}
+
 let _playbackGuardRaf = 0;
 let _hiddenCursorEl: HTMLElement | SVGElement | null = null;
 let _sustainState: {
   key: string;
   enterMs: number;
-  durSec: number;
+  noteDur: number;
+  totalWindowSec: number;
   lastCursorLeft: number;
+  matchedSvg: SVGSVGElement;
+  origBox: Box2D;
+  origStyle: {
+    rx: string;
+    ry: string;
+    fill: string;
+    stroke: string;
+    strokeWidth: string;
+  };
+  sustainTargets: CursorTarget[];
+  restTargets: CursorTarget[];
 } | null = null;
 
 function findOfficialPlaybackCursor(scorePane: HTMLElement): { el: HTMLElement | SVGElement; rect: DOMRect } | null {
@@ -551,7 +578,7 @@ function findOfficialPlaybackCursor(scorePane: HTMLElement): { el: HTMLElement |
         continue;
       }
       const st = getComputedStyle(el);
-      if (st.display === "none" || st.visibility === "hidden") continue;
+      if (st.display === "none" || st.visibility === "hidden" || st.opacity === "0") continue;
       const r = el.getBoundingClientRect();
       if (r.width > 0 && r.height >= 12) return { el, rect: r };
     }
@@ -564,14 +591,14 @@ function findOfficialPlaybackCursor(scorePane: HTMLElement): { el: HTMLElement |
         continue;
       }
       const st = getComputedStyle(rect);
-      if (st.display === "none" || st.visibility === "hidden") continue;
+      if (st.display === "none" || st.visibility === "hidden" || st.opacity === "0") continue;
       if (!isOrangeCursorColor(st.stroke) && !isOrangeCursorColor(st.fill)) continue;
       const r = rect.getBoundingClientRect();
       if (r.width > 1 && r.width <= 60 && r.height >= 16) return { el: rect, rect: r };
     }
     for (const div of page.querySelectorAll<HTMLElement>("div")) {
       const st = getComputedStyle(div);
-      if (st.display === "none" || st.visibility === "hidden") continue;
+      if (st.display === "none" || st.visibility === "hidden" || st.opacity === "0") continue;
       if (!isOrangeCursorColor(st.borderColor) && !isOrangeCursorColor(st.backgroundColor)) continue;
       const r = div.getBoundingClientRect();
       if (r.width > 1 && r.width <= 60 && r.height >= 16) return { el: div, rect: r };
@@ -593,16 +620,16 @@ function findSustainBoxesForNote(
   svg: SVGSVGElement,
   invSvgCtm: DOMMatrix,
   noteId: ElementId,
-  noteBox: { minX: number; minY: number; maxX: number; maxY: number },
-): { minX: number; minY: number; maxX: number; maxY: number }[] {
+  noteBox: Box2D,
+): Box2D[] {
   if (!_app) return [];
 
   const noteMidY = (noteBox.minY + noteBox.maxY) * 0.5;
   const noteH = Math.max(16, noteBox.maxY - noteBox.minY);
   const rowTol = Math.max(24, noteH * 0.95);
 
-  const sameIdSustains: { minX: number; minY: number; maxX: number; maxY: number }[] = [];
-  const nearbySustains: { minX: number; minY: number; maxX: number; maxY: number }[] = [];
+  const sameIdSustains: Box2D[] = [];
+  const nearbySustains: Box2D[] = [];
   let nextNoteMinX = Infinity;
 
   for (const g of svg.querySelectorAll<SVGGElement>("g")) {
@@ -635,7 +662,7 @@ function findSustainBoxesForNote(
       : nearbySustains.filter((b) => b.maxX <= nextNoteMinX + 4);
 
   if (chosen.length === 0) {
-    const dashTexts: { minX: number; minY: number; maxX: number; maxY: number }[] = [];
+    const dashTexts: Box2D[] = [];
     for (const txt of svg.querySelectorAll<SVGTextElement>("text")) {
       const content = (txt.textContent || "").trim();
       if (content !== "-" && content !== "–" && content !== "—" && content !== "−") continue;
@@ -653,11 +680,244 @@ function findSustainBoxesForNote(
   return chosen;
 }
 
+/** 搜尋緊接在當前音符後、下一個音符前的所有簡譜休止符 0（支援同小節、跨小節與換行／換頁） */
+function findFollowingRestTargets(
+  scorePane: HTMLElement,
+  info: NonNullable<ReturnType<typeof getTimeline>>,
+  noteId: ElementId,
+  noteSvg: SVGSVGElement,
+  noteBox: Box2D,
+  noteSpan: { from: number; to: number },
+  pass: number,
+): { targets: CursorTarget[]; nextNoteStart: number | null } {
+  if (!_app) return { targets: [], nextNoteStart: null };
+
+  const svgs = Array.from(scorePane.querySelectorAll<SVGSVGElement>(".score-page-wrap svg"));
+  const noteSvgIdx = svgs.indexOf(noteSvg);
+  if (noteSvgIdx < 0) return { targets: [], nextNoteStart: null };
+
+  const noteMidY = (noteBox.minY + noteBox.maxY) * 0.5;
+  const noteH = Math.max(16, noteBox.maxY - noteBox.minY);
+  const rowTol = Math.max(24, noteH * 0.95);
+
+  let nextNote: { t: number; svgIdx: number; box: Box2D } | null = null;
+  const seenNoteIds = new Set<ElementId>();
+
+  for (let sIdx = noteSvgIdx; sIdx < svgs.length; sIdx++) {
+    const svg = svgs[sIdx]!;
+    const ctm = svg.getScreenCTM();
+    if (!ctm) continue;
+    const inv = ctm.inverse();
+
+    for (const g of svg.querySelectorAll<SVGGElement>("g")) {
+      const entry = _app.syncView.entryAt(g);
+      if (!entry || entry.kind !== "note" || entry.id === noteId || seenNoteIds.has(entry.id)) continue;
+      seenNoteIds.add(entry.id);
+      const t = anchorSeconds(info.tl, info.spq, { id: entry.id, pass });
+      if (t === null || t < noteSpan.to - 0.008) continue;
+      if (nextNote && t >= nextNote.t) continue;
+      const b = unionBoxInSvgRoot(g, inv, null);
+      if (!b) continue;
+      nextNote = { t, svgIdx: sIdx, box: b };
+    }
+  }
+
+  const nextNoteStart = nextNote ? nextNote.t : null;
+  const maxSvgIdx = nextNote ? nextNote.svgIdx : noteSvgIdx;
+
+  if (nextNoteStart !== null && nextNoteStart <= noteSpan.to + 0.03) {
+    return { targets: [], nextNoteStart };
+  }
+
+  const collected: (CursorTarget & { svgIdx: number; rowOrder: number })[] = [];
+  const nextMidY = nextNote ? (nextNote.box.minY + nextNote.box.maxY) * 0.5 : Infinity;
+
+  for (let sIdx = noteSvgIdx; sIdx <= maxSvgIdx; sIdx++) {
+    const svg = svgs[sIdx]!;
+    const ctm = svg.getScreenCTM();
+    if (!ctm) continue;
+    const inv = ctm.inverse();
+
+    const candidateBoxes: { box: Box2D; restId: ElementId | null }[] = [];
+    const coveredTexts = new Set<Element>();
+
+    for (const g of svg.querySelectorAll<SVGGElement>("g")) {
+      const entry = _app.syncView.entryAt(g);
+      if (!entry || (entry.kind as string) !== "rest") continue;
+      const b = unionBoxInSvgRoot(g, inv, null);
+      if (!b) continue;
+      candidateBoxes.push({ box: b, restId: entry.id });
+      g.querySelectorAll("text").forEach((t) => coveredTexts.add(t));
+    }
+
+    for (const txt of svg.querySelectorAll<SVGTextElement>("text")) {
+      if (coveredTexts.has(txt)) continue;
+      if ((txt.textContent || "").trim() !== "0") continue;
+      const entry = _app.syncView.entryAt(txt);
+      if (entry && (entry.kind === "lyric" || entry.kind === "note")) continue;
+      const b = unionBoxInSvgRoot(txt, inv, null);
+      if (!b) continue;
+      if (b.maxY - b.minY < noteH * 0.35) continue;
+      candidateBoxes.push({ box: b, restId: entry?.id ?? null });
+    }
+
+    for (const cand of candidateBoxes) {
+      const b = cand.box;
+      const midY = (b.minY + b.maxY) * 0.5;
+      const onStartRow = sIdx === noteSvgIdx && Math.abs(midY - noteMidY) <= rowTol;
+      const onEndRow = nextNote !== null && sIdx === nextNote.svgIdx && Math.abs(midY - nextMidY) <= rowTol;
+
+      if (onStartRow && onEndRow) {
+        if (b.minX <= noteBox.maxX - 2 || b.maxX > nextNote!.box.minX + 4) continue;
+      } else if (onStartRow) {
+        if (b.minX <= noteBox.maxX - 2) continue;
+      } else if (onEndRow) {
+        if (b.maxX > nextNote!.box.minX + 4) continue;
+      } else {
+        if (sIdx === noteSvgIdx && midY <= noteMidY + rowTol) continue;
+        if (nextNote && sIdx === nextNote.svgIdx && midY >= nextMidY - rowTol) continue;
+        if (!nextNote && sIdx > noteSvgIdx) continue;
+      }
+
+      let relStart: number | undefined;
+      let relEnd: number | undefined;
+      if (cand.restId !== null) {
+        const rs = spanSeconds(info.tl, info.spq, { id: cand.restId, pass }, { id: cand.restId, pass });
+        if (rs && rs.to > rs.from) {
+          relStart = rs.from - noteSpan.from;
+          relEnd = rs.to - noteSpan.from;
+        }
+      }
+
+      collected.push({
+        svg,
+        box: b,
+        svgIdx: sIdx,
+        rowOrder: Math.round(midY / Math.max(12, rowTol * 0.5)),
+        relStart,
+        relEnd,
+      });
+    }
+  }
+
+  collected.sort((a, b) => a.svgIdx - b.svgIdx || a.rowOrder - b.rowOrder || a.box.minX - b.box.minX);
+  return {
+    targets: collected.map(({ svg, box, relStart, relEnd }) => ({ svg, box, relStart, relEnd })),
+    nextNoteStart,
+  };
+}
+
+function renderGhostCursor(
+  scorePane: HTMLElement,
+  target: CursorTarget,
+  matchedSvg: SVGSVGElement,
+  origBox: Box2D,
+  origStyle: { rx: string; ry: string; fill: string; stroke: string; strokeWidth: string },
+): DOMRect {
+  for (const stale of scorePane.querySelectorAll(".sl-sustain-cursor")) {
+    if (stale.parentNode !== target.svg) stale.remove();
+  }
+
+  let ghost = target.svg.querySelector<SVGRectElement>(".sl-sustain-cursor");
+  if (!ghost) {
+    ghost = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    ghost.setAttribute("class", "sl-sustain-cursor");
+    ghost.setAttribute("pointer-events", "none");
+    target.svg.appendChild(ghost);
+  }
+
+  const origW = Math.max(10, origBox.maxX - origBox.minX);
+  const origH = Math.max(12, origBox.maxY - origBox.minY);
+  const origMidY = (origBox.minY + origBox.maxY) * 0.5;
+  const targetMidY = (target.box.minY + target.box.maxY) * 0.5;
+  const sameLineAsOrig = target.svg === matchedSvg && Math.abs(targetMidY - origMidY) <= 24;
+
+  const targetW = Math.max(origW * 0.9, target.box.maxX - target.box.minX + 12);
+  const cx = (target.box.minX + target.box.maxX) * 0.5;
+  const y = sameLineAsOrig ? origBox.minY : target.box.minY - 6;
+  const h = sameLineAsOrig ? origH : Math.max(origH, target.box.maxY - target.box.minY + 12);
+
+  ghost.setAttribute("x", String(cx - targetW * 0.5));
+  ghost.setAttribute("y", String(y));
+  ghost.setAttribute("width", String(targetW));
+  ghost.setAttribute("height", String(h));
+  ghost.setAttribute("rx", origStyle.rx);
+  ghost.setAttribute("ry", origStyle.ry);
+  ghost.setAttribute("fill", origStyle.fill);
+  ghost.setAttribute("stroke", origStyle.stroke);
+  ghost.setAttribute("stroke-width", origStyle.strokeWidth);
+
+  return ghost.getBoundingClientRect();
+}
+
+function stepCachedTargets(
+  scorePane: HTMLElement,
+  officialEl: HTMLElement | SVGElement | null,
+  elapsedSec: number,
+): DOMRect | null {
+  if (!_sustainState) return null;
+  const { noteDur, totalWindowSec, sustainTargets, restTargets, matchedSvg, origBox, origStyle } = _sustainState;
+
+  let activeTarget: CursorTarget | null = null;
+
+  if (elapsedSec < noteDur || restTargets.length === 0) {
+    if (sustainTargets.length > 0) {
+      const totalSteps = sustainTargets.length + 1;
+      const step = Math.min(sustainTargets.length, Math.max(0, Math.floor((elapsedSec / noteDur) * totalSteps)));
+      if (step > 0) activeTarget = sustainTargets[step - 1]!;
+    }
+  } else {
+    const restDurTotal = Math.max(0.08, totalWindowSec - noteDur);
+    const exactMatch = restTargets.find(
+      (rt) => rt.relStart !== undefined && rt.relEnd !== undefined && elapsedSec >= rt.relStart - 0.01 && elapsedSec < rt.relEnd - 0.01,
+    );
+    if (exactMatch) {
+      activeTarget = exactMatch;
+    } else {
+      const restElapsed = Math.max(0, elapsedSec - noteDur);
+      const rIdx = Math.min(restTargets.length - 1, Math.floor((restElapsed / restDurTotal) * restTargets.length));
+      activeTarget = restTargets[rIdx]!;
+    }
+  }
+
+  if (!activeTarget) {
+    if (_hiddenCursorEl) {
+      _hiddenCursorEl.style.opacity = "";
+      _hiddenCursorEl = null;
+    }
+    scorePane.querySelectorAll(".sl-sustain-cursor").forEach((el) => el.remove());
+    return null;
+  }
+
+  if (officialEl) {
+    if (_hiddenCursorEl && _hiddenCursorEl !== officialEl) {
+      _hiddenCursorEl.style.opacity = "";
+    }
+    _hiddenCursorEl = officialEl;
+    officialEl.style.opacity = "0";
+  }
+
+  return renderGhostCursor(scorePane, activeTarget, matchedSvg, origBox, origStyle);
+}
+
 function updateSustainCursor(
   scorePane: HTMLElement,
-  cursor: { el: HTMLElement | SVGElement; rect: DOMRect },
+  cursor: { el: HTMLElement | SVGElement; rect: DOMRect } | null,
 ): DOMRect | null {
   if (!_app || _app.mode === "mixed") {
+    cleanupSustainCursor(scorePane);
+    return null;
+  }
+
+  const nowMs = performance.now();
+
+  if (!cursor) {
+    if (_sustainState && _sustainState.restTargets.length > 0) {
+      const elapsedSec = (nowMs - _sustainState.enterMs) / 1000;
+      if (elapsedSec <= _sustainState.totalWindowSec + 0.08) {
+        return stepCachedTargets(scorePane, null, elapsedSec);
+      }
+    }
     cleanupSustainCursor(scorePane);
     return null;
   }
@@ -677,7 +937,7 @@ function updateSustainCursor(
   const invSvgCtm = svgCtm.inverse();
 
   let matchedId: ElementId | null = null;
-  let matchedBox: { minX: number; minY: number; maxX: number; maxY: number } | null = null;
+  let matchedBox: Box2D | null = null;
   let bestScore = Infinity;
   const curCenterX = (cursor.rect.left + cursor.rect.right) * 0.5;
 
@@ -710,102 +970,90 @@ function updateSustainCursor(
     return null;
   }
 
-  const sustainBoxes = findSustainBoxesForNote(svg, invSvgCtm, matchedId, matchedBox);
-  if (sustainBoxes.length === 0) {
-    cleanupSustainCursor(scorePane);
-    return null;
-  }
-
-  const info = getTimeline();
-  if (!info) {
-    cleanupSustainCursor(scorePane);
-    return null;
-  }
-  const span = spanSeconds(info.tl, info.spq, { id: matchedId, pass: 1 }, { id: matchedId, pass: 1 });
-  if (!span || span.to <= span.from) {
-    cleanupSustainCursor(scorePane);
-    return null;
-  }
-
-  const durSec = Math.max(0.08, span.to - span.from);
   const pageIdx = Array.from(scorePane.querySelectorAll(".score-page-wrap")).indexOf(page ?? svg);
   const noteKey = `${pageIdx}:${matchedId}`;
-  const nowMs = performance.now();
 
-  if (
+  const needRebuild =
     !_sustainState ||
     _sustainState.key !== noteKey ||
     Math.abs(cursor.rect.left - _sustainState.lastCursorLeft) > 8 ||
-    (nowMs - _sustainState.enterMs) / 1000 > durSec + 0.12
-  ) {
+    (nowMs - _sustainState.enterMs) / 1000 > _sustainState.totalWindowSec + 0.15;
+
+  if (needRebuild) {
+    const info = getTimeline();
+    if (!info) {
+      cleanupSustainCursor(scorePane);
+      return null;
+    }
+    const pass = 1;
+    const span = spanSeconds(info.tl, info.spq, { id: matchedId, pass }, { id: matchedId, pass });
+    if (!span || span.to <= span.from) {
+      cleanupSustainCursor(scorePane);
+      return null;
+    }
+
+    const sustainBoxes = findSustainBoxesForNote(svg, invSvgCtm, matchedId, matchedBox);
+    const { targets: restTargets, nextNoteStart } = findFollowingRestTargets(
+      scorePane,
+      info,
+      matchedId,
+      svg,
+      matchedBox,
+      span,
+      pass,
+    );
+
+    if (sustainBoxes.length === 0 && restTargets.length === 0) {
+      cleanupSustainCursor(scorePane);
+      return null;
+    }
+
+    const noteDur = Math.max(0.08, span.to - span.from);
+    const restGap =
+      restTargets.length === 0
+        ? 0
+        : nextNoteStart !== null && nextNoteStart > span.to + 0.03
+          ? nextNoteStart - span.to
+          : restTargets.length * Math.max(0.18, info.spq);
+
+    const origBox =
+      cursor.el instanceof SVGGraphicsElement
+        ? unionBoxInSvgRoot(cursor.el, invSvgCtm, null) ?? clientRectToSvgRoot(cursor.rect, invSvgCtm)
+        : clientRectToSvgRoot(cursor.rect, invSvgCtm);
+
+    const st = getComputedStyle(cursor.el);
+    const origStyle = {
+      rx: cursor.el.getAttribute("rx") || "4",
+      ry: cursor.el.getAttribute("ry") || "4",
+      fill: isOrangeCursorColor(st.fill)
+        ? st.fill
+        : isOrangeCursorColor(st.backgroundColor)
+          ? st.backgroundColor
+          : "rgba(234, 88, 12, 0.22)",
+      stroke: isOrangeCursorColor(st.stroke)
+        ? st.stroke
+        : isOrangeCursorColor(st.borderColor)
+          ? st.borderColor
+          : "#ea580c",
+      strokeWidth: cursor.el.getAttribute("stroke-width") || "1.5",
+    };
+
     _sustainState = {
       key: noteKey,
       enterMs: nowMs,
-      durSec,
+      noteDur,
+      totalWindowSec: noteDur + restGap,
       lastCursorLeft: cursor.rect.left,
+      matchedSvg: svg,
+      origBox,
+      origStyle,
+      sustainTargets: sustainBoxes.map((box) => ({ svg, box })),
+      restTargets,
     };
-  } else {
-    _sustainState.durSec = durSec;
   }
 
-  const elapsedSec = (nowMs - _sustainState.enterMs) / 1000;
-  const totalSteps = sustainBoxes.length + 1;
-  const step = Math.min(sustainBoxes.length, Math.max(0, Math.floor((elapsedSec / durSec) * totalSteps)));
-
-  if (step === 0) {
-    if (_hiddenCursorEl) {
-      _hiddenCursorEl.style.opacity = "";
-      _hiddenCursorEl = null;
-    }
-    svg.querySelectorAll(".sl-sustain-cursor").forEach((el) => el.remove());
-    return null;
-  }
-
-  const targetDash = sustainBoxes[step - 1]!;
-  const origBox =
-    cursor.el instanceof SVGGraphicsElement
-      ? unionBoxInSvgRoot(cursor.el, invSvgCtm, null) ?? clientRectToSvgRoot(cursor.rect, invSvgCtm)
-      : clientRectToSvgRoot(cursor.rect, invSvgCtm);
-
-  if (_hiddenCursorEl && _hiddenCursorEl !== cursor.el) {
-    _hiddenCursorEl.style.opacity = "";
-  }
-  _hiddenCursorEl = cursor.el;
-  cursor.el.style.opacity = "0";
-
-  for (const stale of scorePane.querySelectorAll(".sl-sustain-cursor")) {
-    if (stale.parentNode !== svg) stale.remove();
-  }
-
-  let ghost = svg.querySelector<SVGRectElement>(".sl-sustain-cursor");
-  if (!ghost) {
-    ghost = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-    ghost.setAttribute("class", "sl-sustain-cursor");
-    ghost.setAttribute("pointer-events", "none");
-    svg.appendChild(ghost);
-  }
-
-  const st = getComputedStyle(cursor.el);
-  const fillVal =
-    isOrangeCursorColor(st.fill) ? st.fill : isOrangeCursorColor(st.backgroundColor) ? st.backgroundColor : "rgba(234, 88, 12, 0.22)";
-  const strokeVal =
-    isOrangeCursorColor(st.stroke) ? st.stroke : isOrangeCursorColor(st.borderColor) ? st.borderColor : "#ea580c";
-
-  const origW = Math.max(10, origBox.maxX - origBox.minX);
-  const dashW = Math.max(origW * 0.9, targetDash.maxX - targetDash.minX + 12);
-  const cx = (targetDash.minX + targetDash.maxX) * 0.5;
-
-  ghost.setAttribute("x", String(cx - dashW * 0.5));
-  ghost.setAttribute("y", String(origBox.minY));
-  ghost.setAttribute("width", String(dashW));
-  ghost.setAttribute("height", String(Math.max(12, origBox.maxY - origBox.minY)));
-  ghost.setAttribute("rx", cursor.el.getAttribute("rx") || "4");
-  ghost.setAttribute("ry", cursor.el.getAttribute("ry") || "4");
-  ghost.setAttribute("fill", fillVal);
-  ghost.setAttribute("stroke", strokeVal);
-  ghost.setAttribute("stroke-width", cursor.el.getAttribute("stroke-width") || "1.5");
-
-  return ghost.getBoundingClientRect();
+  const elapsedSec = (nowMs - _sustainState!.enterMs) / 1000;
+  return stepCachedTargets(scorePane, cursor.el, elapsedSec);
 }
 
 function startPlaybackScrollGuard(scorePane: HTMLElement): void {
@@ -821,8 +1069,9 @@ function startPlaybackScrollGuard(scorePane: HTMLElement): void {
     }
 
     const cursor = findOfficialPlaybackCursor(scorePane);
-    if (cursor) {
-      const activeRect = updateSustainCursor(scorePane, cursor) ?? cursor.rect;
+    const activeRect = updateSustainCursor(scorePane, cursor) ?? cursor?.rect ?? null;
+
+    if (activeRect) {
       const paneRect = scorePane.getBoundingClientRect();
       const contentTop = activeRect.top - paneRect.top + scorePane.scrollTop;
 
@@ -858,8 +1107,6 @@ function startPlaybackScrollGuard(scorePane: HTMLElement): void {
       }
 
       if (pendingEnsureFrames > 0) pendingEnsureFrames--;
-    } else {
-      cleanupSustainCursor(scorePane);
     }
 
     _playbackGuardRaf = requestAnimationFrame(step);
@@ -1456,8 +1703,14 @@ async function initEngine(opts: MountShellOptions): Promise<App> {
       app.playback.setStopBtn(opts.stopBtn);
       opts.stopBtn.addEventListener("click", () => cleanupSustainCursor(opts.scorePane));
     }
-    if (opts.progressEl) app.playback.bindProgress(opts.progressEl, opts.timeEl ?? null);
-    if (opts.speedSel) app.playback.bindSpeedSelect(opts.speedSel);
+    if (opts.progressEl) {
+      app.playback.bindProgress(opts.progressEl, opts.timeEl ?? null);
+      opts.progressEl.addEventListener("input", () => cleanupSustainCursor(opts.scorePane));
+    }
+    if (opts.speedSel) {
+      app.playback.bindSpeedSelect(opts.speedSel);
+      opts.speedSel.addEventListener("change", () => cleanupSustainCursor(opts.scorePane));
+    }
 
     preserveIconButton(opts.loopBtn);
     preserveIconButton(opts.metroBtn);
