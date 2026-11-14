@@ -3,6 +3,13 @@
   "framework": "vite",
   "buildCommand": "npm run build",
   "outputDirectory": "out/dist",
+  "redirects": [
+    {
+      "source": "/",
+      "destination": "/score-lab.html",
+      "permanent": false
+    }
+  ],
   "headers": [
     {
       "source": "/(.*)",
