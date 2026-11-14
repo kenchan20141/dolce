@@ -1,10 +1,10 @@
 import "./styles.css";
-import { SAMPLE } from "./editor/sample";
 import { MetaData } from "./smufl/smufl";
 import { setMeasureBackend } from "./common/measure";
 import { browserMeasure, ensureFontsReady } from "./common/measure.browser";
 import { asset } from "./common/asset";
 import { App, type ViewMode } from "./editor/app";
+import { SAMPLE } from "./editor/sample";
 import { initLang } from "./i18n";
 import { attachPinchZoom } from "./editor/pinchzoom";
 import { isPdf } from "./omrkit/pdf";
@@ -60,11 +60,13 @@ async function initEngine(opts: MountShellOptions): Promise<App> {
     const meta = await MetaData.shared();
 
     const app = new App(meta, opts.scorePane);
-// 不共用 omrStatusText，避免 App 內部重排時把「辨識完成」文字清成空字串
-    app.statusEl = null;
+    app.statusEl = opts.statusEl ?? null;
     app.loadSettings();
     app.mountEditor(opts.hiddenCodePane, SAMPLE);
-    
+    // 初始化完立刻清掉預設 SAMPLE 譜面，避免檔案辨識失敗時誤顯示「聖哉聖哉」
+    app.stopPlayback();
+    app.clearPages();
+
     if (opts.playBtn) {
       app.playback.setPlaybackBtn(opts.playBtn);
       opts.playBtn.addEventListener("click", () => void app.playback.toggle());
@@ -105,6 +107,9 @@ async function recognizeAndRender(
   opts: { kind?: OmrKind; onProgress?: (msg: string) => void } = {},
 ): Promise<{ engine: string; info: string }> {
   if (!_app) throw new Error("請先初始化引擎");
+  _app.stopPlayback();
+  _app.clearPages();
+
   const kind: OmrKind = opts.kind ?? "auto";
   const onProgress = opts.onProgress ?? (() => undefined);
   const bytes = new Uint8Array(await file.arrayBuffer());
@@ -118,6 +123,9 @@ async function recognizeAndRender(
     await _app.whenIdle();
     if (/\.(xml|musicxml)$/i.test(name) && _app.mode === "jp") {
       await _app.setViewMode("staff");
+    }
+    if (_app.pageEls.length === 0) {
+      throw new Error(_app.status || `無法解析檔案：${file.name}`);
     }
     return { engine: "native-doc", info: `已載入 ${file.name}` };
   }
@@ -204,12 +212,17 @@ async function recognizeAndRender(
     info = `AI 簡譜 · ${score.rows.length} 行`;
   }
 
-  _app.adoptStaffXml(xml);
+  if (!_app.adoptStaffXml(xml)) {
+    throw new Error(_app.status || "辨識出的樂譜格式無法渲染");
+  }
   await _app.whenIdle();
   if (engine === "jianpu") {
     await _app.setViewMode("original");
   } else {
     await _app.setViewMode("staff");
+  }
+  if (_app.pageEls.length === 0) {
+    throw new Error(_app.status || "樂譜頁面渲染失敗");
   }
 
   return { engine, info };
@@ -238,9 +251,16 @@ window.__dolceEngine = {
   loadFile: recognizeAndRender,
   async loadXmlText(xml, viewMode = "staff") {
     if (!_app) return;
-    _app.adoptStaffXml(xml);
+    _app.stopPlayback();
+    _app.clearPages();
+    if (!_app.adoptStaffXml(xml)) {
+      throw new Error(_app.status || "樂譜 XML 無法渲染");
+    }
     await _app.whenIdle();
     await _app.setViewMode(viewMode);
+    if (_app.pageEls.length === 0) {
+      throw new Error(_app.status || "樂譜頁面渲染失敗");
+    }
   },
   async setViewMode(m) {
     if (_app) await _app.setViewMode(m);
